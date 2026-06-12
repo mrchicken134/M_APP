@@ -1,4 +1,4 @@
-# M App
+# M_APP
 
 Tauri + React + TypeScript desktop application.
 
