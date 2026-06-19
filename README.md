@@ -1,107 +1,98 @@
 # M_APP
 
-🌏 Language: **中文** | [English](#english)
+Language: **中文** | [English](#english)
 
-M_APP 是一个基于 **Tauri + React + TypeScript** 构建的 Windows 桌面个人工作台。它把日历、事项管理、日期标签、系统提醒和托盘后台运行整合在一起，适合用来安排每日任务、查看时间分布、管理清单和记录日期状态。
+M_APP 是一个使用 **Tauri 2 + React + TypeScript** 构建的 Windows 桌面个人工作台。它把日历、事项管理、工作流、习惯、临时任务、系统提醒和 Codex 工作状态检测整合在一个本地优先应用中。
 
-应用是本地优先的：不需要账号，不依赖云同步，数据保存在本机 JSON 文件中。打开即用，安静但够灵活。✨
+应用不需要账号或云服务，主要数据保存在本机 JSON 文件中。界面面向高频桌面操作设计，支持紧凑布局、拖拽交互、系统托盘和统一动效。
 
-## 功能亮点
+## 功能
 
-### 📅 日历
+### 日历
 
-- 月视图显示完整日期网格，并用灰色显示相邻月份日期。
-- “今天”高亮会在跨天后自动刷新，不需要重启应用。
-- 点击日期可选中当天，并在右侧查看当天事项。
-- 双击日期可进入详细模式。
-- 详细模式是周时间轴：左侧为 `0-24` 点，右侧按周日到周六分列。
-- 有开始和结束时间的事项会按真实时间位置显示，例如 `00:30 - 01:30` 会从 0 点和 1 点刻度中间开始，到 1 点和 2 点刻度中间结束。
-- 持续时间大于 1 小时的事项显示图标、标题和时间；较短事项只显示图标，避免文字挤在一起。
-- 同一天内时间重叠的事项会尽量自动并排排列。
-- 月视图日期格会显示未完成事项点，最多显示 5 个点。
+- 月视图显示完整日期网格，相邻月份日期以弱化样式显示。
+- 单击日期切换选中状态，双击日期进入详细周视图。
+- 详细模式使用 `0-24` 小时时间轴，事项按实际开始和结束时间定位。
+- 同一时间段内的多个事项会自动分栏，尽量避免重叠。
+- 月视图日期格显示未完成事项点，最多显示 5 个。
+- 日期格可以显示拖入的 Emoji 标签。
+- 日历右侧可查看当天事项、编辑详情、完成或删除事项。
+- 月视图与周视图之间保留连贯的展开、收缩和滑动动画。
 
-### 🏷️ 日期标签
+### 日期标签
 
-- 标签和待办清单是两套概念：标签用于标记日期，清单用于归类事项。
-- 顶部标签栏只显示图标，并带有新增和删除控制。
-- 可以用 emoji 创建自定义标签。
-- 标签可以拖拽到月视图日期格上。
-- 日期格会在数字上方显示标签图标。
-- 右侧栏可以查看和管理当天标签。
-- 删除模式下标签右上角显示删除按钮；当天标签删完后会自动退出删除模式。
+- 标签与事项清单相互独立，用于标记日期状态。
+- 顶部标签栏使用纯图标布局，支持新增和删除模式。
+- 标签图标可从完整 Emoji 选择器中挑选。
+- 标签可拖到月视图日期格，拖动时显示跟随预览和目标高亮。
+- 右侧当天标签栏可以添加或删除选中日期的标签。
+- 标签定义和日期绑定关系都会持久化保存。
 
-### ✅ 事项列表
+### 事项列表
 
-- 日历事项和待办事项使用统一数据模型。
-- 内置智能清单：
-  - 今天
-  - 即将到来
-  - 重要
-  - 已完成
-  - 全部
-- 支持自定义清单，并可编辑清单名称、图标和颜色。
-- 事项支持字段：
-  - 日期
-  - 时间类型
-  - 开始时间
-  - 结束时间
-  - 标题
-  - 详情
-  - emoji 图标
-  - 优先级
-  - 提醒时间
-  - 循环规则
-  - 子任务
-  - 完成状态
-  - 所属清单
-- 时间类型包括：
-  - 开始 + 结束时间
-  - 只有开始时间
-  - 无时间
-- 单击事项可在右侧编辑详情。
-- 在事项列表中双击事项可跳转到日历对应日期。
-- 在日历中选择事项也可以跳转回事项列表。
-- 简单循环事项支持 daily、weekly、monthly，完成后会生成下一次事项。
+- 日历事项与待办事项使用统一数据模型。
+- 智能清单包括：今天、即将到来、重要、已完成、全部。
+- 支持自定义清单及清单名称、图标和颜色。
+- 事项字段包括日期、时间类型、开始/结束时间、标题、详情、Emoji 图标、优先级、提醒、循环、子任务、完成状态和所属清单。
+- 时间类型支持：开始和结束时间、只有开始时间、无时间。
+- 单击事项选择并编辑，双击事项跳转到对应日历日期。
+- 支持搜索、排序、拖动排序、完成/取消完成和删除动画。
+- 简单循环支持每日、每周、每月；完成后自动生成下一次事项。
 
-### 🔔 提醒与系统托盘
+### 工作流
 
-- 支持系统通知提醒。
-- 应用运行时会定时检查提醒事项。
-- 点击窗口关闭按钮时，应用默认隐藏到系统托盘，而不是直接退出。
-- 托盘菜单包含：
-  - 打开
-  - 退出
-- 托盘图标使用打包后的应用图标。
+- 左侧是独立工作流队列，默认为空。
+- 右侧同时显示事项、临时任务和习惯三个来源区。
+- 从右侧拖入左侧时会复制为独立工作流卡片，不与来源条目同步删除。
+- 工作流卡片支持上下拖动自定义排序。
+- 事项卡片显示时间；所有工作流卡片均可单独设置优先级，并按优先级改变边框和背景颜色。
+- 点击工作流卡片的完成圆圈时：
+  - 事项：标记原事项为完成，并移出工作流。
+  - 临时任务：删除原临时任务，并移出工作流。
+  - 习惯：只移出本次工作流，保留习惯来源。
+- 习惯和临时任务只有名称、详情和 Emoji 图标；默认使用紧凑卡片，双击后打开编辑窗口。
+- 删除右侧来源条目不会删除已经复制到左侧的工作流卡片。
 
-### 💾 本地数据保存
+### 等待区
 
-桌面版数据会保存到 Tauri 应用数据目录下的 `app-data.json`。
+- 工作流左侧下方包含等待区。
+- 将来源卡片或现有工作流卡片拖入等待区时，会先打开设置窗口。
+- 可以按等待分钟数或具体结束时间设置等待。
+- 到期后可选择加入工作流队头或队尾。
+- 等待卡片保留图标和优先级，并支持修改等待时间和加入位置。
 
-Windows 上通常类似：
+### Codex 状态检测
+
+- 应用启动时可显示独立的置顶红绿灯悬浮窗。
+- 红色表示工作中，黄色表示等待审批或检测异常，绿色表示完成/空闲。
+- 悬浮窗尺寸为 `420 x 75`，无边框、可拖动、跳过任务栏。
+- 状态检测页面可以开启或关闭检测，并记忆下次启动设置。
+- 内置 Rust 后台线程会截取所有显示器并匹配 Codex 工作按钮模板。
+- 支持多显示器和不同 DPI 缩放比例，检测时会尝试多组模板尺寸。
+- 单个显示器截屏失败不会阻止其他显示器继续检测。
+- 检测模板位于 `scripts/codex-working-button.png`。
+
+### 提醒、托盘与本地保存
+
+- 支持 Windows 系统通知提醒。
+- 关闭主窗口时应用隐藏到系统托盘，而不是直接退出。
+- 托盘菜单包含“打开”和“退出”。
+- 桌面数据保存在 Tauri 应用数据目录下的 `app-data.json`。
+- 网页预览无法调用 Tauri 后端时，会使用浏览器本地存储作为预览兜底。
+
+Windows 数据路径通常类似：
 
 ```text
 C:\Users\<UserName>\AppData\Roaming\com.mapp.desktop\app-data.json
 ```
 
-保存内容包括：
+### 界面与动画
 
-- 事项
-- 自定义清单
-- 日期标签
-- 标签和日期的绑定关系
-- 已触发提醒记录
-
-网页预览或开发环境无法访问 Tauri 后端时，会使用浏览器本地存储能力作为预览兜底。
-
-### ✨ 动画与交互
-
-- 月份切换动画。
-- 日期选中动画。
-- 标签新增、删除、拖拽和落入日期格动画。
-- 事项新增、删除、完成和清单切换动画。
-- 拖拽标签时有图标跟随效果。
-- 详细模式和月视图之间有展开/收起过渡。
-- 默认窗口大小为 `1600 x 900`。
+- 统一的现代桌面工具视觉系统：浅灰工作区、石墨侧栏和语义化状态颜色。
+- 日历、事项、工作流、设置页和弹窗使用一致的表面、边框、阴影与焦点反馈。
+- 页面、列表、完成操作、拖拽、弹窗和提示均带有轻量动画。
+- 支持系统 `prefers-reduced-motion` 设置，可关闭非必要动画。
+- 默认窗口尺寸为 `1600 x 900`，最小尺寸为 `900 x 600`。
 
 ## 技术栈
 
@@ -109,35 +100,13 @@ C:\Users\<UserName>\AppData\Roaming\com.mapp.desktop\app-data.json
 - React 18
 - TypeScript
 - Vite
-- Rust 后端命令用于本地数据读写
-- Tauri notification plugin
-- Tauri tray integration
+- Rust
+- `tauri-plugin-notification`
 - `emoji-picker-react`
 - `lucide-react`
+- `screenshots` 与 `image` Rust crates
 
-## 项目结构
-
-```text
-M_APP/
-|-- src/
-|   |-- App.tsx
-|   |-- main.tsx
-|   `-- styles.css
-|-- src-tauri/
-|   |-- src/
-|   |   |-- lib.rs
-|   |   `-- main.rs
-|   |-- icons/
-|   |-- capabilities/
-|   |-- Cargo.toml
-|   `-- tauri.conf.json
-|-- package.json
-|-- package-lock.json
-|-- tsconfig.json
-`-- vite.config.ts
-```
-
-## 开发
+## 开发与构建
 
 安装依赖：
 
@@ -145,7 +114,7 @@ M_APP/
 npm.cmd install
 ```
 
-只启动网页开发服务器：
+启动网页开发服务器：
 
 ```powershell
 npm.cmd run dev
@@ -163,50 +132,31 @@ npm.cmd run tauri dev
 npm.cmd run build
 ```
 
-打包桌面应用：
+构建桌面应用：
 
 ```powershell
 npm.cmd run tauri build
 ```
 
-只打包 Windows NSIS 安装包：
+只构建 Windows NSIS 安装包：
 
 ```powershell
 npm.cmd run tauri build -- --bundles nsis
 ```
 
-生成的安装包位于：
-
-```text
-src-tauri/target/release/bundle/nsis/
-```
-
-生成的 exe 位于：
+输出目录：
 
 ```text
 src-tauri/target/release/
-```
-
-## 图标生成
-
-可以从 PNG 源图重新生成 Tauri 图标：
-
-```powershell
-npm.cmd run tauri icon "图标.png"
-```
-
-生成结果位于：
-
-```text
-src-tauri/icons/
+src-tauri/target/release/bundle/nsis/
 ```
 
 ## 说明
 
-- 本项目是本地优先应用，不包含云同步。
-- 当前没有账号系统。
-- 默认关闭窗口会隐藏到托盘；如果要完全退出，请使用托盘菜单中的“退出”。
-- Windows 可能缓存旧 exe 图标。如果新打包的 exe 仍显示旧图标，可以改名、重启资源管理器或刷新图标缓存。
+- 当前版本不包含云同步、账号系统或多设备协作。
+- 完全退出应用请使用托盘菜单中的“退出”。
+- Windows 可能缓存旧的 EXE 图标；可通过重命名文件或刷新图标缓存确认新图标。
+- `codex-status.json` 和 `codex-detector-settings.json` 是本机运行状态文件，不应提交到仓库。
 
 ---
 
@@ -214,162 +164,71 @@ src-tauri/icons/
 
 # M_APP
 
-🌏 Language: [中文](#m_app) | **English**
+Language: [中文](#m_app) | **English**
 
-M_APP is a Windows desktop personal workspace built with **Tauri + React + TypeScript**. It combines a calendar, task manager, date labels, reminders, and tray background behavior into one lightweight local application.
-
-The app is designed for personal daily planning: month overview, week timeline details, full task editing, custom lists, emoji icons, and local JSON persistence without requiring an account or cloud service. ✨
+M_APP is a local-first Windows desktop workspace built with **Tauri 2, React, TypeScript, and Rust**. It combines a calendar, task manager, workflow queue, habits, temporary tasks, reminders, tray behavior, and Codex activity detection in one application.
 
 ## Features
 
-### 📅 Calendar
+### Calendar and labels
 
-- Month calendar with adjacent previous/next month dates shown in gray.
-- Today highlighting updates automatically after midnight while the app is running.
-- Click a date to select it and view that day's tasks.
-- Double-click a date to enter detailed week mode.
-- Detailed mode shows a week timeline with a `0-24` hour scale.
-- Timed tasks are placed by real start/end time. For example, a task from `00:30` to `01:30` starts halfway between the 0 and 1 hour marks and ends halfway between the 1 and 2 hour marks.
-- Tasks longer than one hour display icon, title, and time. Short tasks only show the icon to avoid cramped text.
-- Overlapping tasks in the same day column are automatically arranged side by side as much as possible.
-- Month cells show up to five dots for unfinished tasks on that date.
+- Month calendar with adjacent-month dates, task dots, selectable dates, and Emoji labels.
+- Detailed week timeline using a `0-24` hour scale and real event positioning.
+- Automatic side-by-side layout for overlapping timed tasks.
+- Animated month/week transitions and drag-and-drop date labels.
 
-### 🏷️ Date Labels
+### Task manager
 
-- Calendar labels are separate from task lists.
-- The top label bar contains icon-only labels plus add and delete controls.
-- Labels can be created with emoji icons.
-- Labels can be dragged onto month-view date cells.
-- Date cells show label icons above the date number.
-- The right sidebar can show and manage labels assigned to the selected date.
-- Delete mode shows delete buttons and exits automatically when all labels are removed.
+- Smart lists: Today, Upcoming, Important, Completed, and All.
+- Custom lists with editable names, icons, and colors.
+- Tasks support dates, three time modes, priorities, reminders, recurrence, subtasks, Emoji icons, completion, and list ownership.
+- Search, sorting, manual reordering, calendar navigation, completion animations, and daily/weekly/monthly recurrence.
 
-### ✅ Task Manager
+### Workflow
 
-- Calendar events and tasks use one unified data model.
-- Built-in smart lists:
-  - Today
-  - Upcoming
-  - Important
-  - Completed
-  - All
-- Custom lists with editable name, icon, and color.
-- Task fields:
-  - Date
-  - Time type
-  - Start time
-  - End time
-  - Title
-  - Detail
-  - Emoji icon
-  - Priority
-  - Reminder time
-  - Recurrence
-  - Subtasks
-  - Completion state
-  - List ownership
-- Time types:
-  - Start and end time
-  - Start time only
-  - No time
-- Single-click a task to edit details.
-- Double-click a task in the task list to jump to its calendar date.
-- Calendar task cards can jump back to the task list.
-- Simple recurrence supports daily, weekly, and monthly next-task creation.
+- Empty-by-default workflow queue populated by dragging tasks, temporary tasks, or habits from the source panels.
+- Independent workflow card copies with custom ordering and priority colors.
+- Task cards show their time and complete the original task when checked.
+- Completing a temporary task removes its source; completing a habit only removes the current workflow card.
+- Habits and temporary tasks use compact cards and open an editor on double-click.
 
-### 🔔 Reminders And Tray
+### Waiting area
 
-- System notifications are supported.
-- Reminder checks run while the app is open.
-- Closing the window hides the app to the system tray instead of exiting.
-- Tray menu includes:
-  - Open
-  - Quit
-- The tray icon uses the packaged application icon.
+- Drag cards into a waiting area and configure either a duration or an exact end time.
+- When the wait expires, the card can be inserted at the head or tail of the workflow queue.
 
-### 💾 Local Data Storage
+### Codex activity detector
 
-The desktop app stores user data locally in the Tauri application data directory as `app-data.json`.
+- Always-on-top `420 x 75` traffic-light status window.
+- Red for working, yellow for approval/error, and green for idle/completed.
+- Built-in Rust screen capture and template matching across multiple displays and DPI scales.
+- Persistent detector on/off setting in the main application.
 
-On Windows, the path is usually similar to:
+### Desktop integration
 
-```text
-C:\Users\<UserName>\AppData\Roaming\com.mapp.desktop\app-data.json
-```
-
-Saved data includes:
-
-- Tasks
-- Custom lists
-- Calendar labels
-- Date label assignments
-- Already-triggered reminder IDs
-
-In web preview or development mode without Tauri backend access, the app falls back to browser local storage behavior where applicable.
-
-### ✨ Visual And Interaction Details
-
-- Animated month switching.
-- Animated date selection.
-- Animated label creation, deletion, dragging, and placement.
-- Animated task creation, deletion, completion, and list switching.
-- Drag preview when dragging labels.
-- Smooth transition between month view and detailed week mode.
-- Initial desktop window size is `1600 x 900`.
-
-## Tech Stack
-
-- Tauri 2
-- React 18
-- TypeScript
-- Vite
-- Rust backend commands for local data read/write
-- Tauri notification plugin
-- Tauri tray integration
-- `emoji-picker-react`
-- `lucide-react`
+- Windows notifications and reminder polling.
+- Close-to-tray behavior with Open and Quit tray actions.
+- Local JSON persistence without an account or cloud dependency.
+- Unified compact desktop UI with responsive layouts, drag feedback, modal animation, and reduced-motion support.
 
 ## Development
 
-Install dependencies:
-
 ```powershell
 npm.cmd install
-```
-
-Run web dev server only:
-
-```powershell
 npm.cmd run dev
-```
-
-Run desktop app in development mode:
-
-```powershell
 npm.cmd run tauri dev
-```
-
-Build frontend assets:
-
-```powershell
 npm.cmd run build
-```
-
-Build desktop application:
-
-```powershell
-npm.cmd run tauri build
-```
-
-Build only the NSIS Windows installer:
-
-```powershell
 npm.cmd run tauri build -- --bundles nsis
+```
+
+The NSIS installer is generated under:
+
+```text
+src-tauri/target/release/bundle/nsis/
 ```
 
 ## Notes
 
-- This project is local-first and does not include cloud sync.
-- There is no account system.
-- Closing the window does not exit the app by default; use the tray menu's Quit action to fully exit.
-- Windows may cache old executable icons. If a newly built executable still shows an old icon, rename the executable or refresh the Windows icon cache.
+- The project currently has no cloud sync or account system.
+- Closing the main window hides the app to the tray; use Quit from the tray menu to terminate it.
+- Runtime detector JSON files are intentionally excluded from Git.

@@ -26,6 +26,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "../scripts/codex-working-button.png"
+    ],
     "icon": ["icons/icon.ico", "icons/icon.png", "icons/icon.icns"]
   }
 }

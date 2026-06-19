@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   requestPermission,
@@ -23,11 +24,12 @@ import {
   Search,
   Star,
   Trash2,
+  Workflow,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "calendar" | "events";
+type View = "calendar" | "events" | "workflow" | "codex";
 type CalendarMode = "month" | "detail";
 type SlideDirection = "up" | "down";
 type Priority = "none" | "low" | "medium" | "high";
@@ -35,6 +37,16 @@ type Recurrence = "none" | "daily" | "weekly" | "monthly";
 type TimeKind = "range" | "start" | "none";
 type SmartListId = "today" | "upcoming" | "important" | "completed" | "all";
 type SelectedListId = SmartListId | string;
+type CodexStatusValue = "working" | "pending_approval" | "done" | "idle";
+
+type CodexStatusData = {
+  status?: CodexStatusValue;
+  message?: string;
+  updatedAt?: string;
+};
+
+const workflowSourceDragMime = "application/x-m-app-workflow-source";
+const workflowCardDragMime = "application/x-m-app-workflow-card";
 
 type CalendarDay = {
   date: Date;
@@ -83,12 +95,57 @@ type CalendarTag = {
   icon: string;
 };
 
+type WorkflowItem = {
+  id: string;
+  name: string;
+  detail: string;
+  icon: string;
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+};
+
+type WorkflowSourceKind = "task" | "habit" | "temp";
+
+type WorkflowCard = {
+  id: string;
+  sourceKind: WorkflowSourceKind;
+  sourceId: string;
+  title: string;
+  detail: string;
+  icon: string;
+  timeLabel: string;
+  priority: Priority;
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+};
+
+type WaitingWorkflowCard = WorkflowCard & {
+  waitUntil: string;
+  insertPosition: "head" | "tail";
+};
+
+type PendingWaitingCard = {
+  card: WorkflowCard;
+  sourceWorkflowCardId?: string;
+};
+
+type WorkflowEditorTarget = {
+  sourceKind: WorkflowSourceKind;
+  sourceId: string;
+};
+
 type AppData = {
   schemaVersion: number;
   tasks: TaskEvent[];
   lists: TaskList[];
   tags: CalendarTag[];
   tagAssignments: Record<string, string[]>;
+  habits: WorkflowItem[];
+  tempTasks: WorkflowItem[];
+  workflowCards: WorkflowCard[];
+  waitingWorkflowCards: WaitingWorkflowCard[];
   notifiedReminderIds: string[];
 };
 
@@ -96,7 +153,8 @@ type EmojiTarget =
   | { type: "event" }
   | { type: "tag"; tagId: string }
   | { type: "newTag" }
-  | { type: "list"; listId: string };
+  | { type: "list"; listId: string }
+  | { type: "workflow"; kind: "habit" | "temp"; itemId: string };
 type TagPickerTarget = "global" | "day";
 
 const weekLabels = ["日", "一", "二", "三", "四", "五", "六"];
@@ -167,6 +225,29 @@ function buildReminderValue(task: TaskEvent) {
     return "";
   }
   return task.reminderAt.slice(0, 16);
+}
+
+function toDateTimeInputValue(value: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function fromDateTimeInputValue(value: string) {
+  if (!value) {
+    return "";
+  }
+  return new Date(value).toISOString();
 }
 
 function inferTimeKind(task: Partial<TaskEvent>): TimeKind {
@@ -371,6 +452,76 @@ const initialTags: CalendarTag[] = [
   { id: "tag-life", name: "生活", icon: "☕" }
 ];
 
+function createWorkflowItem(overrides: Partial<WorkflowItem> = {}): WorkflowItem {
+  const timestamp = nowIso();
+  return {
+    id: createId("workflow"),
+    name: "新条目",
+    detail: "",
+    icon: "📝",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    order: Date.now(),
+    ...overrides
+  };
+}
+
+function createWorkflowCard(overrides: Partial<WorkflowCard> = {}): WorkflowCard {
+  const timestamp = nowIso();
+  return {
+    id: createId("flow-card"),
+    sourceKind: "task",
+    sourceId: "",
+    title: "新卡片",
+    detail: "",
+    icon: "📌",
+    timeLabel: "",
+    priority: "none",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    order: Date.now(),
+    ...overrides
+  };
+}
+
+function createWaitingWorkflowCard(
+  overrides: Partial<WaitingWorkflowCard> = {}
+): WaitingWorkflowCard {
+  return {
+    ...createWorkflowCard(overrides),
+    waitUntil: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    insertPosition: "tail",
+    ...overrides
+  };
+}
+
+const initialHabits: WorkflowItem[] = [
+  createWorkflowItem({
+    id: "habit-1",
+    name: "每日复盘",
+    detail: "整理今天完成了什么、卡在哪里、明天先做什么。",
+    icon: "🌿",
+    order: 1
+  }),
+  createWorkflowItem({
+    id: "habit-2",
+    name: "清空收件箱",
+    detail: "把零散想法归入事项、习惯或临时任务。",
+    icon: "📥",
+    order: 2
+  })
+];
+
+const initialTempTasks: WorkflowItem[] = [
+  createWorkflowItem({
+    id: "temp-1",
+    name: "临时记录",
+    detail: "随手放一个还没想好日期和优先级的任务。",
+    icon: "📝",
+    order: 1
+  })
+];
+
 function createTask(overrides: Partial<TaskEvent> = {}): TaskEvent {
   const timestamp = nowIso();
   return {
@@ -464,6 +615,51 @@ function normalizeTask(task: Partial<TaskEvent>, index: number): TaskEvent {
   });
 }
 
+function normalizeWorkflowItem(
+  item: Partial<WorkflowItem>,
+  index: number,
+  defaultIcon = "📝"
+): WorkflowItem {
+  return createWorkflowItem({
+    ...item,
+    id: item.id ?? createId("workflow"),
+    name: item.name ?? "未命名",
+    detail: item.detail ?? "",
+    icon: item.icon ?? defaultIcon,
+    createdAt: item.createdAt ?? nowIso(),
+    updatedAt: item.updatedAt ?? nowIso(),
+    order: item.order ?? index
+  });
+}
+
+function normalizeWorkflowCard(item: Partial<WorkflowCard>, index: number): WorkflowCard {
+  return createWorkflowCard({
+    ...item,
+    id: item.id ?? createId("flow-card"),
+    sourceKind: item.sourceKind ?? "task",
+    sourceId: item.sourceId ?? "",
+    title: item.title ?? "未命名卡片",
+    detail: item.detail ?? "",
+    icon: item.icon ?? "📌",
+    timeLabel: item.timeLabel ?? "",
+    priority: item.priority ?? "none",
+    createdAt: item.createdAt ?? nowIso(),
+    updatedAt: item.updatedAt ?? nowIso(),
+    order: item.order ?? index
+  });
+}
+
+function normalizeWaitingWorkflowCard(
+  item: Partial<WaitingWorkflowCard>,
+  index: number
+): WaitingWorkflowCard {
+  return createWaitingWorkflowCard({
+    ...normalizeWorkflowCard(item, index),
+    waitUntil: item.waitUntil ?? new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    insertPosition: item.insertPosition === "head" ? "head" : "tail"
+  });
+}
+
 function normalizeData(data: Partial<AppData> | null | undefined): AppData {
   if (!data || !Array.isArray(data.tasks)) {
     return {
@@ -472,6 +668,10 @@ function normalizeData(data: Partial<AppData> | null | undefined): AppData {
       lists: initialLists,
       tags: initialTags,
       tagAssignments: {},
+      habits: initialHabits,
+      tempTasks: initialTempTasks,
+      workflowCards: [],
+      waitingWorkflowCards: [],
       notifiedReminderIds: []
     };
   }
@@ -482,11 +682,164 @@ function normalizeData(data: Partial<AppData> | null | undefined): AppData {
     lists: Array.isArray(data.lists) && data.lists.length > 0 ? data.lists : initialLists,
     tags: Array.isArray(data.tags) && data.tags.length > 0 ? data.tags : initialTags,
     tagAssignments: data.tagAssignments ?? {},
+    habits: Array.isArray(data.habits)
+      ? data.habits.map((item, index) => normalizeWorkflowItem(item, index, "🌿"))
+      : initialHabits,
+    tempTasks: Array.isArray(data.tempTasks)
+      ? data.tempTasks.map((item, index) => normalizeWorkflowItem(item, index, "📝"))
+      : initialTempTasks,
+    workflowCards: Array.isArray(data.workflowCards)
+      ? data.workflowCards.map(normalizeWorkflowCard)
+      : [],
+    waitingWorkflowCards: Array.isArray(data.waitingWorkflowCards)
+      ? data.waitingWorkflowCards.map(normalizeWaitingWorkflowCard)
+      : [],
     notifiedReminderIds: data.notifiedReminderIds ?? []
   };
 }
 
+const codexStatusLabels: Record<CodexStatusValue, string> = {
+  working: "工作中",
+  pending_approval: "审批中",
+  done: "空闲中",
+  idle: "空闲中"
+};
+
+function normalizeCodexStatus(data: Partial<CodexStatusData> | null | undefined) {
+  const status =
+    data?.status === "working" ||
+    data?.status === "pending_approval" ||
+    data?.status === "done" ||
+    data?.status === "idle"
+      ? data.status
+      : "idle";
+
+  return {
+    status,
+    message: data?.message?.trim() || (status === "idle" ? "无请求" : codexStatusLabels[status]),
+    updatedAt: data?.updatedAt ?? ""
+  };
+}
+
+function resolveCodexStatusDisplay(data: CodexStatusData) {
+  const normalized = normalizeCodexStatus(data);
+  const updatedTime = normalized.updatedAt ? Date.parse(normalized.updatedAt) : NaN;
+  const isStale =
+    (normalized.status === "working" || normalized.status === "pending_approval") &&
+    (!Number.isFinite(updatedTime) || Date.now() - updatedTime > 10 * 60 * 1000);
+
+  if (isStale) {
+    return {
+      ...normalized,
+      status: "pending_approval" as CodexStatusValue,
+      label: "审批中",
+      message: normalized.message || "状态可能过期"
+    };
+  }
+
+  return {
+    ...normalized,
+    label: codexStatusLabels[normalized.status]
+  };
+}
+
+function CodexStatusPanel() {
+  const [statusData, setStatusData] = useState<CodexStatusData>({
+    status: "idle",
+    message: "无请求"
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function loadStatus() {
+      invoke<CodexStatusData | null>("load_codex_status")
+        .then((data) => {
+          if (!cancelled) {
+            setStatusData(normalizeCodexStatus(data));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setStatusData({ status: "idle", message: "无请求" });
+          }
+        });
+    }
+
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const display = resolveCodexStatusDisplay(statusData);
+  const title = `${display.label}${display.message ? `：${display.message}` : ""}`;
+
+  return (
+    <main
+      className={`codex-status-window ${display.status}`}
+      title={title}
+      onMouseDown={() => {
+        getCurrentWindow().startDragging().catch(() => undefined);
+      }}
+    >
+      <div className="traffic-lights" aria-label={title}>
+        <span className="traffic-light red" />
+        <span className="traffic-light yellow" />
+        <span className="traffic-light green" />
+      </div>
+      <span className="codex-status-text">{display.label}</span>
+    </main>
+  );
+}
+
+function CodexNavIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="codex-nav-icon"
+      fill="none"
+      height={size}
+      viewBox="0 0 24 24"
+      width={size}
+    >
+      <g fill="currentColor" opacity="0.95" transform="rotate(-10 12 12)">
+        <polygon points="8.2,7.3 14,6.4 18.3,10.5 16.1,16.3 10.1,17.2 5.8,13.1" />
+        <circle cx="8.2" cy="7.3" r="4.25" />
+        <circle cx="14" cy="6.4" r="4.25" />
+        <circle cx="18.3" cy="10.5" r="4.25" />
+        <circle cx="16.1" cy="16.3" r="4.25" />
+        <circle cx="10.1" cy="17.2" r="4.25" />
+        <circle cx="5.8" cy="13.1" r="4.25" />
+      </g>
+      <path
+        d="m7.35 9.55 2.45 2.9-2.45 2.9"
+        stroke="#ffffff"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2.15"
+      />
+      <path
+        d="M13.5 15.1h4.2"
+        stroke="#ffffff"
+        strokeLinecap="round"
+        strokeWidth="2.15"
+      />
+    </svg>
+  );
+}
+
 function App() {
+  const isCodexStatusPanel =
+    new URLSearchParams(window.location.search).get("panel") === "codex-status";
+
+  if (isCodexStatusPanel) {
+    return <CodexStatusPanel />;
+  }
+
   const [view, setView] = useState<View>("calendar");
   const [today, setToday] = useState(() => new Date());
   const [visibleDate, setVisibleDate] = useState(
@@ -502,6 +855,12 @@ function App() {
   const [lists, setLists] = useState<TaskList[]>(initialLists);
   const [tags, setTags] = useState<CalendarTag[]>(initialTags);
   const [tagAssignments, setTagAssignments] = useState<Record<string, string[]>>({});
+  const [habits, setHabits] = useState<WorkflowItem[]>(initialHabits);
+  const [tempTasks, setTempTasks] = useState<WorkflowItem[]>(initialTempTasks);
+  const [workflowCards, setWorkflowCards] = useState<WorkflowCard[]>([]);
+  const [waitingWorkflowCards, setWaitingWorkflowCards] = useState<WaitingWorkflowCard[]>([]);
+  const [codexDetectorEnabled, setCodexDetectorEnabled] = useState(true);
+  const [codexDetectorSaving, setCodexDetectorSaving] = useState(false);
   const [notifiedReminderIds, setNotifiedReminderIds] = useState<string[]>([]);
   const [selectedEventId, setSelectedEventId] = useState(initialTasks[0].id);
   const [selectedListId, setSelectedListId] = useState<SelectedListId>("today");
@@ -525,6 +884,19 @@ function App() {
   const [dragPointerPosition, setDragPointerPosition] = useState({ x: 0, y: 0 });
   const [draggingTaskId, setDraggingTaskId] = useState("");
   const [dragOverTaskId, setDragOverTaskId] = useState("");
+  const [draggingWorkflowSource, setDraggingWorkflowSource] = useState<WorkflowCard | null>(null);
+  const [draggingWorkflowCardId, setDraggingWorkflowCardId] = useState("");
+  const [dragOverWorkflowCardId, setDragOverWorkflowCardId] = useState("");
+  const [workflowDropTarget, setWorkflowDropTarget] = useState<"queue" | "waiting" | "">("");
+  const [pendingWaitingCard, setPendingWaitingCard] = useState<PendingWaitingCard | null>(null);
+  const [waitingMode, setWaitingMode] = useState<"duration" | "endTime">("duration");
+  const [waitingMinutes, setWaitingMinutes] = useState(10);
+  const [waitingEndTime, setWaitingEndTime] = useState(() =>
+    toDateTimeInputValue(new Date(Date.now() + 10 * 60 * 1000).toISOString())
+  );
+  const [waitingInsertPosition, setWaitingInsertPosition] = useState<"head" | "tail">("tail");
+  const [workflowEditorTarget, setWorkflowEditorTarget] =
+    useState<WorkflowEditorTarget | null>(null);
   const [slideDirection, setSlideDirection] = useState<SlideDirection>("up");
   const [calendarKey, setCalendarKey] = useState(0);
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -534,8 +906,17 @@ function App() {
   const dayClickTimerRef = useRef<number | null>(null);
   const eventClickTimerRef = useRef<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const draggingWorkflowSourceRef = useRef<WorkflowCard | null>(null);
+  const draggingWorkflowCardIdRef = useRef("");
   const pendingTagDragRef = useRef<{
     tagId: string;
+    x: number;
+    y: number;
+    active: boolean;
+  } | null>(null);
+  const pendingWorkflowDragRef = useRef<{
+    sourceCard?: WorkflowCard;
+    cardId?: string;
     x: number;
     y: number;
     active: boolean;
@@ -553,6 +934,10 @@ function App() {
     .map((tagId) => tags.find((tag) => tag.id === tagId))
     .filter((tag): tag is CalendarTag => Boolean(tag));
   const draggingTag = tags.find((tag) => tag.id === draggingTagId) ?? null;
+  const draggingWorkflowPreview =
+    draggingWorkflowSource ??
+    workflowCards.find((card) => card.id === draggingWorkflowCardId) ??
+    null;
   const todayKey = useMemo(() => formatDateKey(today), [today]);
 
   const dayEvents = useMemo(() => {
@@ -560,6 +945,23 @@ function App() {
       .filter((event) => event.date === selectedDateKey)
       .sort((a, b) => compareTaskTime(a, b));
   }, [tasks, selectedDateKey]);
+
+  const workflowCurrentTask = useMemo(() => {
+    return (
+      selectedEvent ??
+      tasks
+        .filter((task) => !task.completed)
+        .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b))[0] ??
+      null
+    );
+  }, [selectedEvent, tasks]);
+
+  const workflowTaskPreview = useMemo(() => {
+    return tasks
+      .filter((task) => !task.completed)
+      .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b))
+      .slice(0, 8);
+  }, [tasks]);
 
   const openTaskCountByDate = useMemo(() => {
     return tasks.reduce<Record<string, number>>((counts, task) => {
@@ -691,9 +1093,22 @@ function App() {
     };
   }, [tasks, today, todayKey]);
 
-  const title = view === "calendar" ? "日历" : "事项列表";
+  const title =
+    view === "calendar"
+      ? "日历"
+      : view === "events"
+        ? "事项列表"
+        : view === "workflow"
+          ? "工作流"
+          : "状态检测";
   const subtitle =
-    view === "calendar" ? "查看本月安排和日期状态" : "按清单、时间和优先级管理全部事项";
+    view === "calendar"
+      ? "查看本月安排和日期状态"
+      : view === "events"
+        ? "按清单、时间和优先级管理全部事项"
+        : view === "workflow"
+          ? "聚焦当前任务，整理习惯和临时任务"
+          : "控制 Codex 工作状态检测的启动与记忆";
   const isCurrentMonth =
     visibleDate.getFullYear() === today.getFullYear() &&
     visibleDate.getMonth() === today.getMonth();
@@ -723,6 +1138,10 @@ function App() {
         setLists(nextData.lists);
         setTags(nextData.tags);
         setTagAssignments(nextData.tagAssignments);
+        setHabits(nextData.habits);
+        setTempTasks(nextData.tempTasks);
+        setWorkflowCards(nextData.workflowCards);
+        setWaitingWorkflowCards(nextData.waitingWorkflowCards);
         setNotifiedReminderIds(nextData.notifiedReminderIds);
         setSelectedEventId(nextData.tasks[0]?.id ?? "");
         setSaveStatus("数据已载入");
@@ -735,6 +1154,25 @@ function App() {
       .finally(() => {
         if (!cancelled) {
           setDataLoaded(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<boolean>("load_codex_detector_enabled")
+      .then((enabled) => {
+        if (!cancelled) {
+          setCodexDetectorEnabled(enabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCodexDetectorEnabled(true);
         }
       });
 
@@ -759,13 +1197,28 @@ function App() {
         lists,
         tags,
         tagAssignments,
+        habits,
+        tempTasks,
+        workflowCards,
+        waitingWorkflowCards,
         notifiedReminderIds
       };
       invoke("save_app_data", { data: payload })
         .then(() => setSaveStatus("已保存"))
         .catch(() => setSaveStatus("保存失败"));
     }, 500);
-  }, [dataLoaded, lists, notifiedReminderIds, tagAssignments, tags, tasks]);
+  }, [
+    dataLoaded,
+    habits,
+    lists,
+    notifiedReminderIds,
+    tagAssignments,
+    tags,
+    tasks,
+    tempTasks,
+    waitingWorkflowCards,
+    workflowCards
+  ]);
 
   useEffect(() => {
     if (selectedDateTags.length === 0 && dayTagDeleteMode) {
@@ -825,35 +1278,73 @@ function App() {
         ?.dataset.dateKey;
     }
 
+    function workflowTargetFromPointer(event: PointerEvent) {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      const cardId = target
+        ?.closest<HTMLElement>(".workflow-card[data-workflow-card-id]")
+        ?.dataset.workflowCardId;
+      const dropPanel = target?.closest<HTMLElement>(".workflow-drop-panel");
+      const dropTarget: "queue" | "waiting" | "" = dropPanel?.classList.contains("waiting")
+        ? "waiting"
+        : dropPanel?.classList.contains("queue")
+          ? "queue"
+          : "";
+      return { cardId: cardId ?? "", dropTarget };
+    }
+
     function handlePointerMove(event: PointerEvent) {
       const pendingDrag = pendingTagDragRef.current;
-      if (!pendingDrag || tagDeleteMode || calendarMode !== "month") {
+      if (pendingDrag && !tagDeleteMode && calendarMode === "month") {
+        const moveX = event.clientX - pendingDrag.x;
+        const moveY = event.clientY - pendingDrag.y;
+        const isPastDragThreshold = Math.hypot(moveX, moveY) > 6;
+
+        if (!pendingDrag.active && isPastDragThreshold) {
+          pendingDrag.active = true;
+          setDraggingTagId(pendingDrag.tagId);
+        }
+
+        if (pendingDrag.active) {
+          event.preventDefault();
+          setDragPointerPosition({ x: event.clientX, y: event.clientY });
+          setDragHoverDateKey(dateKeyFromPointer(event) ?? "");
+        }
+      }
+
+      const pendingWorkflowDrag = pendingWorkflowDragRef.current;
+      if (!pendingWorkflowDrag) {
         return;
       }
 
-      const moveX = event.clientX - pendingDrag.x;
-      const moveY = event.clientY - pendingDrag.y;
-      const isPastDragThreshold = Math.hypot(moveX, moveY) > 6;
+      const workflowMoveX = event.clientX - pendingWorkflowDrag.x;
+      const workflowMoveY = event.clientY - pendingWorkflowDrag.y;
+      const isWorkflowPastDragThreshold =
+        Math.hypot(workflowMoveX, workflowMoveY) > 6;
 
-      if (!pendingDrag.active && isPastDragThreshold) {
-        pendingDrag.active = true;
-        setDraggingTagId(pendingDrag.tagId);
+      if (!pendingWorkflowDrag.active && isWorkflowPastDragThreshold) {
+        pendingWorkflowDrag.active = true;
+        if (pendingWorkflowDrag.sourceCard) {
+          draggingWorkflowSourceRef.current = pendingWorkflowDrag.sourceCard;
+          setDraggingWorkflowSource(pendingWorkflowDrag.sourceCard);
+        }
+        if (pendingWorkflowDrag.cardId) {
+          draggingWorkflowCardIdRef.current = pendingWorkflowDrag.cardId;
+          setDraggingWorkflowCardId(pendingWorkflowDrag.cardId);
+        }
       }
 
-      if (pendingDrag.active) {
+      if (pendingWorkflowDrag.active) {
         event.preventDefault();
         setDragPointerPosition({ x: event.clientX, y: event.clientY });
-        setDragHoverDateKey(dateKeyFromPointer(event) ?? "");
+        const workflowTarget = workflowTargetFromPointer(event);
+        setWorkflowDropTarget(workflowTarget.dropTarget);
+        setDragOverWorkflowCardId(workflowTarget.cardId);
       }
     }
 
     function handlePointerUp(event: PointerEvent) {
       const pendingDrag = pendingTagDragRef.current;
-      if (!pendingDrag) {
-        return;
-      }
-
-      if (pendingDrag.active && calendarMode === "month") {
+      if (pendingDrag?.active && calendarMode === "month") {
         const dateKey = dateKeyFromPointer(event);
         if (dateKey) {
           assignTagToDate(pendingDrag.tagId, dateKey);
@@ -868,6 +1359,35 @@ function App() {
       setDraggingTagId("");
       setDragPointerPosition({ x: 0, y: 0 });
       setDragHoverDateKey("");
+
+      const pendingWorkflowDrag = pendingWorkflowDragRef.current;
+      if (pendingWorkflowDrag?.active) {
+        const workflowTarget = workflowTargetFromPointer(event);
+        if (
+          pendingWorkflowDrag.cardId &&
+          workflowTarget.cardId &&
+          workflowTarget.cardId !== pendingWorkflowDrag.cardId
+        ) {
+          reorderWorkflowCard(pendingWorkflowDrag.cardId, workflowTarget.cardId);
+        } else if (workflowTarget.dropTarget === "waiting") {
+          if (pendingWorkflowDrag.sourceCard) {
+            openWaitingSettings(pendingWorkflowDrag.sourceCard);
+          } else if (pendingWorkflowDrag.cardId) {
+            const card = workflowCards.find(
+              (item) => item.id === pendingWorkflowDrag.cardId
+            );
+            if (card) {
+              openWaitingSettings(card, card.id);
+            }
+          }
+        } else if (workflowTarget.dropTarget === "queue" && pendingWorkflowDrag.sourceCard) {
+          addWorkflowCard(pendingWorkflowDrag.sourceCard);
+        }
+      }
+
+      pendingWorkflowDragRef.current = null;
+      resetWorkflowDragState();
+      setDragPointerPosition({ x: 0, y: 0 });
     }
 
     document.addEventListener("pointermove", handlePointerMove);
@@ -878,7 +1398,7 @@ function App() {
       document.removeEventListener("pointerup", handlePointerUp);
       document.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [calendarMode, tagDeleteMode, tagAssignments, tags]);
+  }, [calendarMode, tagDeleteMode, tagAssignments, tags, workflowCards]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -905,6 +1425,41 @@ function App() {
 
     return () => window.clearInterval(timer);
   }, [notifiedReminderIds, tasks]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const dueCards = waitingWorkflowCards.filter((card) => {
+        const waitUntil = new Date(card.waitUntil).getTime();
+        return Number.isFinite(waitUntil) && waitUntil <= now;
+      });
+
+      if (dueCards.length === 0) {
+        return;
+      }
+
+      setWaitingWorkflowCards((cards) =>
+        cards.filter((card) => !dueCards.some((dueCard) => dueCard.id === card.id))
+      );
+      setWorkflowCards((cards) => {
+        const headCards = dueCards
+          .filter((card) => card.insertPosition === "head")
+          .map((card) => createWorkflowCard({ ...card, id: card.id }));
+        const tailCards = dueCards
+          .filter((card) => card.insertPosition === "tail")
+          .map((card) => createWorkflowCard({ ...card, id: card.id }));
+        return [...headCards, ...cards, ...tailCards].map((card, index) => ({
+          ...card,
+          order: index,
+          updatedAt: nowIso()
+        }));
+      });
+      setToast(`${dueCards[0].title} 已加入工作流`);
+      window.setTimeout(() => setToast(""), 2800);
+    }, 10000);
+
+    return () => window.clearInterval(timer);
+  }, [waitingWorkflowCards]);
 
   function moveToMonth(nextDate: Date, direction: SlideDirection) {
     setSlideDirection(direction);
@@ -1076,6 +1631,312 @@ function App() {
         setSelectedEventId("");
       }
     }, 260);
+  }
+
+  function addWorkflowItem(kind: "habit" | "temp") {
+    const item = createWorkflowItem({
+      id: createId(kind),
+      name: kind === "habit" ? "新习惯" : "临时任务",
+      detail: kind === "habit" ? "写下这个习惯的触发场景和目标。" : "记录一个暂时不需要排期的任务。",
+      icon: kind === "habit" ? "🌿" : "📝",
+      order: Date.now()
+    });
+
+    if (kind === "habit") {
+      setHabits((items) => [...items, item]);
+    } else {
+      setTempTasks((items) => [...items, item]);
+    }
+  }
+
+  function updateWorkflowItem(
+    kind: "habit" | "temp",
+    itemId: string,
+    changes: Partial<Pick<WorkflowItem, "name" | "detail" | "icon">>
+  ) {
+    const update = (items: WorkflowItem[]) =>
+      items.map((item) =>
+        item.id === itemId ? { ...item, ...changes, updatedAt: nowIso() } : item
+      );
+
+    if (kind === "habit") {
+      setHabits(update);
+    } else {
+      setTempTasks(update);
+    }
+  }
+
+  function deleteWorkflowItem(kind: "habit" | "temp", itemId: string) {
+    if (kind === "habit") {
+      setHabits((items) => items.filter((item) => item.id !== itemId));
+    } else {
+      setTempTasks((items) => items.filter((item) => item.id !== itemId));
+    }
+  }
+
+  function openWorkflowSourceEditor(
+    sourceKind: WorkflowSourceKind,
+    sourceId: string
+  ) {
+    if (sourceKind === "task") {
+      setSelectedEventId(sourceId);
+    }
+    setWorkflowEditorTarget({ sourceKind, sourceId });
+  }
+
+  function createWorkflowCardFromSource(
+    sourceKind: WorkflowSourceKind,
+    source: TaskEvent | WorkflowItem
+  ) {
+    if (sourceKind === "task") {
+      const task = source as TaskEvent;
+      return createWorkflowCard({
+        sourceKind,
+        sourceId: task.id,
+        title: task.title || "未命名事项",
+        detail: task.detail,
+        icon: task.icon,
+        timeLabel: task.timeKind === "none" ? "" : formatTaskTime(task),
+        priority: task.priority,
+        order: Date.now()
+      });
+    }
+
+    const item = source as WorkflowItem;
+    return createWorkflowCard({
+      sourceKind,
+      sourceId: item.id,
+      title: item.name || "未命名卡片",
+      detail: item.detail,
+      icon: item.icon,
+      timeLabel: "",
+      priority: "none",
+      order: Date.now()
+    });
+  }
+
+  function resetWorkflowDragState() {
+    draggingWorkflowSourceRef.current = null;
+    draggingWorkflowCardIdRef.current = "";
+    setDraggingWorkflowSource(null);
+    setDraggingWorkflowCardId("");
+    setDragOverWorkflowCardId("");
+    setWorkflowDropTarget("");
+  }
+
+  function writeWorkflowSourceDragData(event: DragEvent<HTMLElement>, card: WorkflowCard) {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(workflowSourceDragMime, JSON.stringify(card));
+    event.dataTransfer.setData("text/plain", card.title);
+    event.dataTransfer.setData("Text", card.title);
+    draggingWorkflowSourceRef.current = card;
+    draggingWorkflowCardIdRef.current = "";
+    setDraggingWorkflowSource(card);
+  }
+
+  function writeWorkflowCardDragData(event: DragEvent<HTMLElement>, cardId: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(workflowCardDragMime, cardId);
+    event.dataTransfer.setData("text/plain", cardId);
+    event.dataTransfer.setData("Text", cardId);
+    draggingWorkflowCardIdRef.current = cardId;
+    draggingWorkflowSourceRef.current = null;
+    setDraggingWorkflowCardId(cardId);
+  }
+
+  function readWorkflowSourceDragData(event: DragEvent<HTMLElement>) {
+    const text = event.dataTransfer.getData(workflowSourceDragMime);
+    if (!text) {
+      return draggingWorkflowSourceRef.current ?? draggingWorkflowSource;
+    }
+    try {
+      return normalizeWorkflowCard(JSON.parse(text), Date.now());
+    } catch {
+      return draggingWorkflowSourceRef.current ?? draggingWorkflowSource;
+    }
+  }
+
+  function readWorkflowCardDragId(event: DragEvent<HTMLElement>) {
+    return (
+      event.dataTransfer.getData(workflowCardDragMime) ||
+      draggingWorkflowCardIdRef.current ||
+      draggingWorkflowCardId
+    );
+  }
+
+  function addWorkflowCard(card: WorkflowCard, position: "head" | "tail" = "tail") {
+    setWorkflowCards((cards) => {
+      const nextCard = createWorkflowCard({
+        ...card,
+        id: createId("flow-card"),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        order: position === "head" ? Date.now() * -1 : Date.now()
+      });
+      const nextCards = position === "head" ? [nextCard, ...cards] : [...cards, nextCard];
+      return nextCards.map((item, index) => ({ ...item, order: index }));
+    });
+  }
+
+  function addWaitingWorkflowCard(
+    card: WorkflowCard,
+    waitUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    insertPosition: "head" | "tail" = "tail"
+  ) {
+    setWaitingWorkflowCards((cards) => [
+      ...cards,
+      createWaitingWorkflowCard({
+        ...card,
+        id: createId("waiting-flow-card"),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        waitUntil,
+        insertPosition,
+        order: Date.now()
+      })
+    ]);
+  }
+
+  function openWaitingSettings(card: WorkflowCard, sourceWorkflowCardId?: string) {
+    setPendingWaitingCard({ card, sourceWorkflowCardId });
+    setWaitingMode("duration");
+    setWaitingMinutes(10);
+    setWaitingEndTime(
+      toDateTimeInputValue(new Date(Date.now() + 10 * 60 * 1000).toISOString())
+    );
+    setWaitingInsertPosition("tail");
+  }
+
+  function confirmWaitingSettings() {
+    if (!pendingWaitingCard) {
+      return;
+    }
+
+    const waitUntil =
+      waitingMode === "duration"
+        ? new Date(Date.now() + Math.max(1, waitingMinutes) * 60 * 1000).toISOString()
+        : fromDateTimeInputValue(waitingEndTime);
+
+    if (!waitUntil || new Date(waitUntil).getTime() <= Date.now()) {
+      setToast("等待结束时间必须晚于现在");
+      window.setTimeout(() => setToast(""), 2400);
+      return;
+    }
+
+    if (pendingWaitingCard.sourceWorkflowCardId) {
+      setWorkflowCards((cards) =>
+        cards.filter((card) => card.id !== pendingWaitingCard.sourceWorkflowCardId)
+      );
+    }
+    addWaitingWorkflowCard(
+      pendingWaitingCard.card,
+      waitUntil,
+      waitingInsertPosition
+    );
+    setPendingWaitingCard(null);
+  }
+
+  function reorderWorkflowCard(activeId: string, targetId: string) {
+    if (activeId === targetId) {
+      return;
+    }
+    setWorkflowCards((cards) => {
+      const activeIndex = cards.findIndex((item) => item.id === activeId);
+      const targetIndex = cards.findIndex((item) => item.id === targetId);
+      if (activeIndex < 0 || targetIndex < 0) {
+        return cards;
+      }
+      const nextCards = [...cards];
+      const [moving] = nextCards.splice(activeIndex, 1);
+      nextCards.splice(targetIndex, 0, moving);
+      return nextCards.map((item, index) => ({ ...item, order: index }));
+    });
+  }
+
+  function deleteWorkflowCard(cardId: string) {
+    setWorkflowCards((cards) => cards.filter((card) => card.id !== cardId));
+  }
+
+  function updateWorkflowCard(
+    cardId: string,
+    changes: Partial<Pick<WorkflowCard, "priority">>
+  ) {
+    setWorkflowCards((cards) =>
+      cards.map((card) =>
+        card.id === cardId ? { ...card, ...changes, updatedAt: nowIso() } : card
+      )
+    );
+  }
+
+  function completeWorkflowCard(card: WorkflowCard) {
+    if (card.sourceKind === "task") {
+      const sourceTask = tasks.find((task) => task.id === card.sourceId);
+      if (sourceTask && !sourceTask.completed) {
+        toggleTaskCompleted(sourceTask);
+      }
+    } else if (card.sourceKind === "temp") {
+      setTempTasks((items) => items.filter((item) => item.id !== card.sourceId));
+    }
+
+    deleteWorkflowCard(card.id);
+  }
+
+  function deleteWaitingWorkflowCard(cardId: string) {
+    setWaitingWorkflowCards((cards) => cards.filter((card) => card.id !== cardId));
+  }
+
+  function updateWaitingWorkflowCard(
+    cardId: string,
+    changes: Partial<
+      Pick<WaitingWorkflowCard, "waitUntil" | "insertPosition" | "priority">
+    >
+  ) {
+    setWaitingWorkflowCards((cards) =>
+      cards.map((card) =>
+        card.id === cardId ? { ...card, ...changes, updatedAt: nowIso() } : card
+      )
+    );
+  }
+
+  function handleWorkflowQueueDrop(event: DragEvent<HTMLElement>) {
+    const sourceCard = readWorkflowSourceDragData(event);
+    if (sourceCard) {
+      addWorkflowCard(sourceCard);
+    }
+    resetWorkflowDragState();
+  }
+
+  function handleWorkflowWaitingDrop(event: DragEvent<HTMLElement>) {
+    const sourceCard = readWorkflowSourceDragData(event);
+    const cardId = readWorkflowCardDragId(event);
+    if (sourceCard) {
+      openWaitingSettings(sourceCard);
+    } else if (cardId) {
+      const card = workflowCards.find((item) => item.id === cardId);
+      if (card) {
+        openWaitingSettings(card, card.id);
+      }
+    }
+    resetWorkflowDragState();
+  }
+
+  function toggleCodexDetector() {
+    const nextEnabled = !codexDetectorEnabled;
+    setCodexDetectorEnabled(nextEnabled);
+    setCodexDetectorSaving(true);
+    invoke<boolean>("set_codex_detector_enabled", { enabled: nextEnabled })
+      .then((enabled) => {
+        setCodexDetectorEnabled(enabled);
+        setToast(enabled ? "Codex 状态检测已开启" : "Codex 状态检测已关闭");
+      })
+      .catch(() => {
+        setCodexDetectorEnabled(!nextEnabled);
+        setToast("状态检测设置保存失败");
+      })
+      .finally(() => {
+        setCodexDetectorSaving(false);
+        window.setTimeout(() => setToast(""), 2200);
+      });
   }
 
   function openEventInCalendar(event: TaskEvent) {
@@ -1689,6 +2550,10 @@ function App() {
                 addTag(emoji.emoji);
               } else if (emojiTarget.type === "list") {
                 updateList(emojiTarget.listId, { icon: emoji.emoji });
+              } else if (emojiTarget.type === "workflow") {
+                updateWorkflowItem(emojiTarget.kind, emojiTarget.itemId, {
+                  icon: emoji.emoji
+                });
               } else {
                 updateSelectedEvent({ icon: emoji.emoji });
               }
@@ -1892,6 +2757,765 @@ function App() {
     );
   }
 
+  function renderWorkflowItem(item: WorkflowItem, kind: "habit" | "temp") {
+    return (
+      <article className={`workflow-mini-card ${kind}`} key={item.id}>
+        <input
+          value={item.name}
+          onChange={(event) =>
+            updateWorkflowItem(kind, item.id, { name: event.target.value })
+          }
+          aria-label={kind === "habit" ? "习惯名称" : "临时任务名称"}
+        />
+        <textarea
+          value={item.detail}
+          onChange={(event) =>
+            updateWorkflowItem(kind, item.id, { detail: event.target.value })
+          }
+          aria-label={kind === "habit" ? "习惯详情" : "临时任务详情"}
+        />
+        <button type="button" onClick={() => deleteWorkflowItem(kind, item.id)}>
+          <Trash2 size={14} />
+        </button>
+      </article>
+    );
+  }
+
+  function renderWorkflowView() {
+    return (
+      <section className="workflow-workspace">
+        <aside className="workflow-current-panel">
+          <p className="eyebrow">Current Task</p>
+          {workflowCurrentTask ? (
+            <article className="workflow-current-card">
+              <span className="workflow-current-icon">{workflowCurrentTask.icon}</span>
+              <div>
+                <h2>{workflowCurrentTask.title}</h2>
+                <p>{workflowCurrentTask.detail || "这个任务还没有详情。"}</p>
+              </div>
+              <dl>
+                <div>
+                  <dt>日期</dt>
+                  <dd>{workflowCurrentTask.date}</dd>
+                </div>
+                <div>
+                  <dt>时间</dt>
+                  <dd>{formatTaskTime(workflowCurrentTask)}</dd>
+                </div>
+                <div>
+                  <dt>优先级</dt>
+                  <dd>{priorityLabels[workflowCurrentTask.priority]}</dd>
+                </div>
+              </dl>
+              <div className="workflow-current-actions">
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={() => toggleTaskCompleted(workflowCurrentTask)}
+                >
+                  <Check size={16} />
+                  完成
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openEventInCalendar(workflowCurrentTask)}
+                >
+                  去日历
+                </button>
+              </div>
+            </article>
+          ) : (
+            <p className="empty-state">暂时没有当前任务</p>
+          )}
+        </aside>
+
+        <section className="workflow-board">
+          <section className="workflow-panel rough">
+            <div className="workflow-panel-title">
+              <div>
+                <p className="eyebrow">Rough List</p>
+                <h2>粗略事项</h2>
+              </div>
+            </div>
+            <div className="workflow-readonly-list">
+              {workflowTaskPreview.length === 0 ? (
+                <p className="empty-state">没有未完成事项</p>
+              ) : (
+                workflowTaskPreview.map((task) => (
+                  <button
+                    className="workflow-readonly-item"
+                    key={task.id}
+                    type="button"
+                    onClick={() => setSelectedEventId(task.id)}
+                    onDoubleClick={() => openEventInCalendar(task)}
+                  >
+                    <span>{task.icon}</span>
+                    <strong>{task.title}</strong>
+                    <small>
+                      {task.date} · {formatTaskTime(task)}
+                    </small>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="workflow-panel habits">
+            <div className="workflow-panel-title">
+              <div>
+                <p className="eyebrow">Habits</p>
+                <h2>习惯列表</h2>
+              </div>
+              <button type="button" onClick={() => addWorkflowItem("habit")}>
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="workflow-mini-list">
+              {habits.map((item) => renderWorkflowItem(item, "habit"))}
+            </div>
+          </section>
+
+          <section className="workflow-panel temporary">
+            <div className="workflow-panel-title">
+              <div>
+                <p className="eyebrow">Temporary</p>
+                <h2>临时任务</h2>
+              </div>
+              <button type="button" onClick={() => addWorkflowItem("temp")}>
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="workflow-mini-list">
+              {tempTasks.map((item) => renderWorkflowItem(item, "temp"))}
+            </div>
+          </section>
+        </section>
+      </section>
+    );
+  }
+
+  function renderWorkflowSourceItem(
+    sourceKind: WorkflowSourceKind,
+    source: TaskEvent | WorkflowItem
+  ) {
+    const card = createWorkflowCardFromSource(sourceKind, source);
+    const isTask = sourceKind === "task";
+    const title = isTask ? (source as TaskEvent).title : (source as WorkflowItem).name;
+    const detail = isTask ? (source as TaskEvent).detail : (source as WorkflowItem).detail;
+    const icon = isTask ? (source as TaskEvent).icon : (source as WorkflowItem).icon;
+
+    return (
+      <article
+        className={`workflow-source-card ${sourceKind}`}
+        key={`${sourceKind}-${source.id}`}
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          event.preventDefault();
+          pendingWorkflowDragRef.current = {
+            sourceCard: card,
+            x: event.clientX,
+            y: event.clientY,
+            active: false
+          };
+        }}
+        onDoubleClick={() => openWorkflowSourceEditor(sourceKind, source.id)}
+      >
+        <span className="workflow-card-icon">{icon}</span>
+        <span className="workflow-card-copy">
+          <strong>{title || "未命名卡片"}</strong>
+          {isTask ? <small>{detail || "拖入左侧工作流"}</small> : null}
+        </span>
+        {sourceKind !== "task" ? (
+          <button
+            type="button"
+            onClick={() => deleteWorkflowItem(sourceKind, source.id)}
+            onDragStart={(event) => event.preventDefault()}
+            onMouseDown={(event) => event.stopPropagation()}
+            aria-label="删除来源"
+          >
+            <Trash2 size={14} />
+          </button>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderWorkflowEditableItem(item: WorkflowItem, kind: "habit" | "temp") {
+    return renderWorkflowSourceItem(kind, item);
+  }
+
+  function renderWorkflowQueueCard(card: WorkflowCard) {
+    const sourceTask =
+      card.sourceKind === "task"
+        ? tasks.find((task) => task.id === card.sourceId)
+        : null;
+    const timeLabel =
+      sourceTask && sourceTask.timeKind !== "none"
+        ? formatTaskTime(sourceTask)
+        : card.timeLabel;
+
+    return (
+      <article
+        className={`workflow-card priority-${card.priority} ${
+          dragOverWorkflowCardId === card.id ? "drag-over" : ""
+        }`}
+        data-workflow-card-id={card.id}
+        key={card.id}
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          event.preventDefault();
+          pendingWorkflowDragRef.current = {
+            cardId: card.id,
+            x: event.clientX,
+            y: event.clientY,
+            active: false
+          };
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = draggingWorkflowCardIdRef.current
+            ? "move"
+            : "copy";
+          setDragOverWorkflowCardId(card.id);
+        }}
+        onDragLeave={() => {
+          if (dragOverWorkflowCardId === card.id) {
+            setDragOverWorkflowCardId("");
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const movingCardId = readWorkflowCardDragId(event);
+          const sourceCard = readWorkflowSourceDragData(event);
+          if (movingCardId) {
+            reorderWorkflowCard(movingCardId, card.id);
+          } else if (sourceCard) {
+            addWorkflowCard(sourceCard);
+          }
+          resetWorkflowDragState();
+        }}
+        onDragEnd={resetWorkflowDragState}
+      >
+        <button
+          className="task-check"
+          type="button"
+          onClick={() => completeWorkflowCard(card)}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={
+            card.sourceKind === "task"
+              ? "完成事项"
+              : card.sourceKind === "temp"
+                ? "完成并删除临时任务"
+                : "完成本次习惯"
+          }
+        >
+          <Circle size={16} />
+        </button>
+        <span className="workflow-card-icon">{card.icon}</span>
+        <span className="workflow-card-copy">
+          <span className="workflow-card-title-row">
+            <strong>{card.title}</strong>
+            {card.sourceKind === "task" && timeLabel ? (
+              <time>{timeLabel}</time>
+            ) : null}
+          </span>
+          <small>{card.detail || "无详情"}</small>
+        </span>
+        <select
+          className={`workflow-priority-select ${card.priority}`}
+          value={card.priority}
+          onPointerDown={(event) => event.stopPropagation()}
+          onChange={(event) =>
+            updateWorkflowCard(card.id, {
+              priority: event.target.value as Priority
+            })
+          }
+          aria-label="工作流优先级"
+        >
+          <option value="none">无</option>
+          <option value="low">低</option>
+          <option value="medium">中</option>
+          <option value="high">高</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => deleteWorkflowCard(card.id)}
+          onDragStart={(event) => event.preventDefault()}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <Trash2 size={14} />
+        </button>
+      </article>
+    );
+  }
+
+  function renderWaitingWorkflowCard(card: WaitingWorkflowCard) {
+    return (
+      <article
+        className={`workflow-waiting-card priority-${card.priority}`}
+        key={card.id}
+      >
+        <div className="workflow-waiting-main">
+          <span className="workflow-card-icon">{card.icon}</span>
+          <span className="workflow-card-copy">
+            <strong>{card.title}</strong>
+            <small>{card.detail || "等待到点后加入工作流"}</small>
+          </span>
+          <button
+            type="button"
+            onClick={() => deleteWaitingWorkflowCard(card.id)}
+            onDragStart={(event) => event.preventDefault()}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+        <div className="workflow-waiting-controls">
+          <label>
+            等到
+            <input
+              type="datetime-local"
+              value={toDateTimeInputValue(card.waitUntil)}
+              onChange={(event) =>
+                updateWaitingWorkflowCard(card.id, {
+                  waitUntil: fromDateTimeInputValue(event.target.value)
+                })
+              }
+            />
+          </label>
+          <label>
+            加入
+            <select
+              value={card.insertPosition}
+              onChange={(event) =>
+                updateWaitingWorkflowCard(card.id, {
+                  insertPosition: event.target.value === "head" ? "head" : "tail"
+                })
+              }
+            >
+              <option value="tail">队尾</option>
+              <option value="head">队头</option>
+            </select>
+          </label>
+          <label>
+            优先级
+            <select
+              value={card.priority}
+              onChange={(event) =>
+                updateWaitingWorkflowCard(card.id, {
+                  priority: event.target.value as Priority
+                })
+              }
+            >
+              <option value="none">无</option>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </label>
+        </div>
+      </article>
+    );
+  }
+
+  function renderWaitingSettingsModal() {
+    if (!pendingWaitingCard) {
+      return null;
+    }
+
+    return (
+      <div
+        className="emoji-modal-backdrop"
+        role="presentation"
+        onMouseDown={() => setPendingWaitingCard(null)}
+      >
+        <section
+          className="waiting-settings-modal"
+          role="dialog"
+          aria-label="设置等待时间"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="waiting-settings-header">
+            <div>
+              <p className="eyebrow">Waiting</p>
+              <h2>{pendingWaitingCard.card.title}</h2>
+            </div>
+            <button type="button" onClick={() => setPendingWaitingCard(null)}>
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="waiting-mode-switch" role="group" aria-label="等待方式">
+            <button
+              className={waitingMode === "duration" ? "active" : ""}
+              type="button"
+              onClick={() => setWaitingMode("duration")}
+            >
+              等待时长
+            </button>
+            <button
+              className={waitingMode === "endTime" ? "active" : ""}
+              type="button"
+              onClick={() => setWaitingMode("endTime")}
+            >
+              结束时间
+            </button>
+          </div>
+
+          {waitingMode === "duration" ? (
+            <label className="waiting-setting-field">
+              等待分钟数
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={waitingMinutes}
+                onChange={(event) =>
+                  setWaitingMinutes(Math.max(1, Number(event.target.value) || 1))
+                }
+              />
+            </label>
+          ) : (
+            <label className="waiting-setting-field">
+              等待结束时间
+              <input
+                type="datetime-local"
+                value={waitingEndTime}
+                onChange={(event) => setWaitingEndTime(event.target.value)}
+              />
+            </label>
+          )}
+
+          <label className="waiting-setting-field">
+            到期后加入
+            <select
+              value={waitingInsertPosition}
+              onChange={(event) =>
+                setWaitingInsertPosition(event.target.value === "head" ? "head" : "tail")
+              }
+            >
+              <option value="tail">工作流队尾</option>
+              <option value="head">工作流队头</option>
+            </select>
+          </label>
+
+          <div className="waiting-settings-actions">
+            <button type="button" onClick={() => setPendingWaitingCard(null)}>
+              取消
+            </button>
+            <button className="primary-action" type="button" onClick={confirmWaitingSettings}>
+              确认等待
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  function renderWorkflowSourceEditorModal() {
+    if (!workflowEditorTarget) {
+      return null;
+    }
+
+    const { sourceKind, sourceId } = workflowEditorTarget;
+    const workflowItem =
+      sourceKind === "habit"
+        ? habits.find((item) => item.id === sourceId)
+        : sourceKind === "temp"
+          ? tempTasks.find((item) => item.id === sourceId)
+          : null;
+
+    return (
+      <div
+        className="emoji-modal-backdrop"
+        role="presentation"
+        onMouseDown={() => setWorkflowEditorTarget(null)}
+      >
+        <section
+          className={`workflow-source-editor-modal ${sourceKind}`}
+          role="dialog"
+          aria-label="编辑工作流来源"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="workflow-source-editor-header">
+            <div>
+              <p className="eyebrow">
+                {sourceKind === "task"
+                  ? "事项"
+                  : sourceKind === "habit"
+                    ? "习惯"
+                    : "临时任务"}
+              </p>
+              <h2>编辑详情</h2>
+            </div>
+            <button type="button" onClick={() => setWorkflowEditorTarget(null)}>
+              <X size={18} />
+            </button>
+          </div>
+
+          {sourceKind === "task" ? (
+            renderTaskEditor()
+          ) : workflowItem ? (
+            <div className="workflow-source-editor-fields">
+              <div className="workflow-icon-field">
+                <span>图标</span>
+                <div className="icon-grid">
+                  {eventIcons.slice(0, 8).map((icon) => (
+                    <button
+                      className={workflowItem.icon === icon ? "active" : ""}
+                      key={icon}
+                      type="button"
+                      onClick={() =>
+                        updateWorkflowItem(sourceKind, sourceId, { icon })
+                      }
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmojiTarget({
+                        type: "workflow",
+                        kind: sourceKind,
+                        itemId: sourceId
+                      });
+                      setEmojiPickerOpen(true);
+                    }}
+                  >
+                    <Plus size={17} />
+                  </button>
+                </div>
+              </div>
+              <label>
+                名称
+                <input
+                  value={workflowItem.name}
+                  onChange={(event) =>
+                    updateWorkflowItem(sourceKind, sourceId, {
+                      name: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <label>
+                详情
+                <textarea
+                  value={workflowItem.detail}
+                  onChange={(event) =>
+                    updateWorkflowItem(sourceKind, sourceId, {
+                      detail: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <button
+                className="workflow-source-delete"
+                type="button"
+                onClick={() => {
+                  deleteWorkflowItem(sourceKind, sourceId);
+                  setWorkflowEditorTarget(null);
+                }}
+              >
+                <Trash2 size={15} />
+                删除
+              </button>
+            </div>
+          ) : (
+            <p className="empty-state">这个条目已经不存在</p>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  function renderWorkflowBoardView() {
+    const workflowTaskSources = tasks
+      .filter((task) => !task.completed)
+      .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b));
+    const orderedWorkflowCards = [...workflowCards].sort((a, b) => a.order - b.order);
+    const orderedWaitingCards = [...waitingWorkflowCards].sort(
+      (a, b) => a.order - b.order
+    );
+
+    return (
+      <section
+        className={`workflow-workspace modern ${
+          draggingWorkflowPreview ? "is-dragging" : ""
+        }`}
+      >
+        <aside className="workflow-lane">
+          <section
+            className={`workflow-drop-panel queue ${
+              workflowDropTarget === "queue" ? "drop-active" : ""
+            }`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = draggingWorkflowCardIdRef.current
+                ? "move"
+                : "copy";
+              setWorkflowDropTarget("queue");
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = draggingWorkflowCardIdRef.current
+                ? "move"
+                : "copy";
+              setWorkflowDropTarget("queue");
+            }}
+            onDragLeave={() => {
+              if (workflowDropTarget === "queue") {
+                setWorkflowDropTarget("");
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleWorkflowQueueDrop(event);
+            }}
+          >
+            <div className="workflow-panel-title">
+              <div>
+                <p className="eyebrow">Workflow</p>
+                <h2>当前工作流</h2>
+              </div>
+            </div>
+            <div className="workflow-card-list">
+              {orderedWorkflowCards.length === 0 ? (
+                <p className="empty-state">从右侧拖入事项、临时任务或习惯</p>
+              ) : (
+                orderedWorkflowCards.map(renderWorkflowQueueCard)
+              )}
+            </div>
+          </section>
+
+          <section
+            className={`workflow-drop-panel waiting ${
+              workflowDropTarget === "waiting" ? "drop-active" : ""
+            }`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              setWorkflowDropTarget("waiting");
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              setWorkflowDropTarget("waiting");
+            }}
+            onDragLeave={() => {
+              if (workflowDropTarget === "waiting") {
+                setWorkflowDropTarget("");
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleWorkflowWaitingDrop(event);
+            }}
+          >
+            <div className="workflow-panel-title">
+              <div>
+                <p className="eyebrow">Waiting</p>
+                <h2>等待区</h2>
+              </div>
+            </div>
+            <div className="workflow-card-list">
+              {orderedWaitingCards.length === 0 ? (
+                <p className="empty-state">拖到这里后设置等待时间</p>
+              ) : (
+                orderedWaitingCards.map(renderWaitingWorkflowCard)
+              )}
+            </div>
+          </section>
+        </aside>
+
+        <section className="workflow-source-board">
+          <section className="workflow-panel rough">
+            <div className="workflow-panel-title">
+              <div>
+                <h2>事项</h2>
+              </div>
+            </div>
+            <div className="workflow-readonly-list">
+              {workflowTaskSources.length === 0 ? (
+                <p className="empty-state">没有未完成事项</p>
+              ) : (
+                workflowTaskSources.map((task) => renderWorkflowSourceItem("task", task))
+              )}
+            </div>
+          </section>
+
+          <section className="workflow-panel temporary">
+            <div className="workflow-panel-title">
+              <div>
+                <h2>临时任务</h2>
+              </div>
+              <button type="button" onClick={() => addWorkflowItem("temp")}>
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="workflow-mini-list">
+              {tempTasks.map((item) => renderWorkflowEditableItem(item, "temp"))}
+            </div>
+          </section>
+
+          <section className="workflow-panel habits">
+            <div className="workflow-panel-title">
+              <div>
+                <h2>习惯</h2>
+              </div>
+              <button type="button" onClick={() => addWorkflowItem("habit")}>
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="workflow-mini-list">
+              {habits.map((item) => renderWorkflowEditableItem(item, "habit"))}
+            </div>
+          </section>
+        </section>
+      </section>
+    );
+  }
+
+  function renderCodexDetectorView() {
+    return (
+      <section className="codex-control-workspace">
+        <article className="codex-control-panel">
+          <div className="codex-control-copy">
+            <p className="eyebrow">Codex Detector</p>
+            <h2>工作状态检测</h2>
+            <p>
+              开启后，M App 启动时会自动运行内置屏幕识别，并用悬浮红绿灯显示 Codex
+              是否正在工作。
+            </p>
+          </div>
+          <button
+            className={`codex-detector-switch ${
+              codexDetectorEnabled ? "active" : ""
+            }`}
+            type="button"
+            onClick={toggleCodexDetector}
+            disabled={codexDetectorSaving}
+            aria-pressed={codexDetectorEnabled}
+          >
+            <span className="detector-switch-light" aria-hidden="true" />
+            <span>{codexDetectorEnabled ? "开启" : "关闭"}</span>
+          </button>
+          <div className="codex-detector-status">
+            <strong>
+              {codexDetectorEnabled ? "下次启动自动检测" : "下次启动不检测"}
+            </strong>
+            <small>{codexDetectorSaving ? "正在保存..." : "设置已记忆"}</small>
+          </div>
+        </article>
+      </section>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -1918,6 +3542,22 @@ function App() {
           >
             <ListTodo size={18} />
             <span>事项列表</span>
+          </button>
+          <button
+            className={`nav-item ${view === "workflow" ? "active" : ""}`}
+            type="button"
+            onClick={() => setView("workflow")}
+          >
+            <Workflow size={18} />
+            <span>工作流</span>
+          </button>
+          <button
+            className={`nav-item ${view === "codex" ? "active" : ""}`}
+            type="button"
+            onClick={() => setView("codex")}
+          >
+            <CodexNavIcon size={18} />
+            <span>状态检测</span>
           </button>
         </nav>
       </aside>
@@ -1969,6 +3609,19 @@ function App() {
             aria-hidden="true"
           >
             {draggingTag.icon}
+          </div>
+        ) : null}
+        {draggingWorkflowPreview ? (
+          <div
+            className="workflow-drag-preview"
+            style={{
+              left: dragPointerPosition.x,
+              top: dragPointerPosition.y
+            }}
+            aria-hidden="true"
+          >
+            <span>{draggingWorkflowPreview.icon}</span>
+            <strong>{draggingWorkflowPreview.title}</strong>
           </div>
         ) : null}
         {toast ? <div className="toast">{toast}</div> : null}
@@ -2196,7 +3849,7 @@ function App() {
             {renderEmojiModal()}
             {renderTagPickerModal()}
           </section>
-        ) : (
+        ) : view === "events" ? (
           <section className="todo-workspace">
             <aside className="todo-lists-panel">
               <div className="todo-panel-title">
@@ -2324,6 +3977,15 @@ function App() {
             </aside>
             {renderEmojiModal()}
           </section>
+        ) : view === "workflow" ? (
+          <>
+            {renderWorkflowBoardView()}
+            {renderWaitingSettingsModal()}
+            {renderWorkflowSourceEditorModal()}
+            {renderEmojiModal()}
+          </>
+        ) : (
+          renderCodexDetectorView()
         )}
       </section>
     </main>
