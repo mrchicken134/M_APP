@@ -26,9 +26,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": [
-      "../scripts/codex-working-button.png"
-    ],
+    "resources": {
+      "../scripts/codex-working-button.png": "scripts/codex-working-button.png",
+      "../scripts/codex-cli-ready.png": "scripts/codex-cli-ready.png",
+      "../scripts/codex-cli-working.png": "scripts/codex-cli-working.png",
+      "../scripts/codex-cli-approval.png": "scripts/codex-cli-approval.png",
+      "D:/Document/Work/m_prooject/opencv-4.12.0/opencv/build/x64/vc16/bin/opencv_world4120.dll": "opencv_world4120.dll"
+    },
     "icon": ["icons/icon.ico", "icons/icon.png", "icons/icon.icns"]
   }
 }

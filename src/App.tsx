@@ -43,6 +43,39 @@ type CodexStatusData = {
   status?: CodexStatusValue;
   message?: string;
   updatedAt?: string;
+  match?: {
+    kind: string;
+    label: string;
+    screenIndex: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    score: number;
+    confidence?: number;
+    scale?: number;
+    consecutiveFrames?: number;
+  };
+};
+
+type CodexDetectorSettings = {
+  enabled: boolean;
+  templateWidth: number;
+  templateHeight: number;
+  templateScalePercent: number;
+  screenWidth: number;
+  screenHeight: number;
+  screenScalePercent: number;
+  updatedAt?: string;
+};
+
+type WorkflowReturnAlert = {
+  id?: string;
+  title?: string;
+  message?: string;
+  count?: number;
+  createdAt?: string;
+  acknowledged?: boolean;
 };
 
 const workflowSourceDragMime = "application/x-m-app-workflow-source";
@@ -106,6 +139,8 @@ type WorkflowItem = {
 };
 
 type WorkflowSourceKind = "task" | "habit" | "temp";
+type WorkflowDropTarget = "queue" | "waiting" | "";
+type WorkflowInsertPosition = "before" | "after";
 
 type WorkflowCard = {
   id: string;
@@ -130,6 +165,10 @@ type PendingWaitingCard = {
   card: WorkflowCard;
   sourceWorkflowCardId?: string;
 };
+
+type WorkflowInsertTarget =
+  | { position: "head" | "tail" }
+  | { targetId: string; position: WorkflowInsertPosition };
 
 type WorkflowEditorTarget = {
   sourceKind: WorkflowSourceKind;
@@ -183,6 +222,25 @@ const smartLists: Array<{
   { id: "all", name: "全部", icon: Inbox }
 ];
 
+const defaultCodexDetectorSettings: CodexDetectorSettings = {
+  enabled: true,
+  templateWidth: 2560,
+  templateHeight: 1440,
+  templateScalePercent: 125,
+  screenWidth: 2560,
+  screenHeight: 1440,
+  screenScalePercent: 125
+};
+
+const codexResolutionPresets = [
+  { label: "2560 × 1440", width: 2560, height: 1440 },
+  { label: "1920 × 1080", width: 1920, height: 1080 },
+  { label: "3840 × 2160", width: 3840, height: 2160 },
+  { label: "自定义", width: 0, height: 0 }
+];
+
+const codexScalePresets = [100, 125, 150, 175, 200];
+
 function formatDateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -209,6 +267,10 @@ function addMonths(date: Date, count: number) {
 }
 
 function nextDateForRecurrence(dateKey: string, recurrence: Recurrence) {
+  if (!dateKey) {
+    return "";
+  }
+
   const date = new Date(`${dateKey}T00:00:00`);
   if (recurrence === "daily") {
     date.setDate(date.getDate() + 1);
@@ -287,6 +349,18 @@ function formatTaskTime(task: TaskEvent) {
     return "未设时间段";
   }
   return `${task.startTime || "?"} - ${task.endTime || "?"}`;
+}
+
+function formatTaskDate(task: Pick<TaskEvent, "date">) {
+  return task.date || "无日期";
+}
+
+function compareTaskDate(a: Pick<TaskEvent, "date">, b: Pick<TaskEvent, "date">) {
+  return (a.date || "9999-12-31").localeCompare(b.date || "9999-12-31");
+}
+
+function isTaskDateInRange(task: Pick<TaskEvent, "date">, startKey: string, endKey: string) {
+  return Boolean(task.date && task.date >= startKey && task.date <= endKey);
 }
 
 function compareTaskTime(a: TaskEvent, b: TaskEvent) {
@@ -526,7 +600,7 @@ function createTask(overrides: Partial<TaskEvent> = {}): TaskEvent {
   const timestamp = nowIso();
   return {
     id: createId("task"),
-    date: formatDateKey(new Date()),
+    date: "",
     timeKind: "range",
     startTime: "09:00",
     endTime: "10:00",
@@ -550,6 +624,7 @@ function createTask(overrides: Partial<TaskEvent> = {}): TaskEvent {
 const initialTasks: TaskEvent[] = [
   createTask({
     id: "event-1",
+    date: formatDateKey(new Date()),
     title: "整理任务",
     detail: "梳理今天要完成的任务，确认优先级和预计完成时间。",
     icon: "✅",
@@ -601,7 +676,7 @@ function normalizeTask(task: Partial<TaskEvent>, index: number): TaskEvent {
     ...timeFields,
     id: task.id ?? createId("task"),
     title: task.title ?? "未命名事项",
-    date: task.date ?? formatDateKey(new Date()),
+    date: typeof task.date === "string" ? task.date : "",
     completed: Boolean(task.completed),
     completedAt: task.completedAt ?? null,
     priority: task.priority ?? "none",
@@ -717,8 +792,56 @@ function normalizeCodexStatus(data: Partial<CodexStatusData> | null | undefined)
   return {
     status,
     message: data?.message?.trim() || (status === "idle" ? "无请求" : codexStatusLabels[status]),
-    updatedAt: data?.updatedAt ?? ""
+    updatedAt: data?.updatedAt ?? "",
+    match: data?.match
   };
+}
+
+function normalizeWorkflowReturnAlert(
+  data: Partial<WorkflowReturnAlert> | null | undefined
+) {
+  if (!data || data.acknowledged) {
+    return null;
+  }
+
+  const title = data.title?.trim() || "工作流事项";
+  const count = Math.max(1, Number(data.count) || 1);
+  return {
+    id: data.id || createId("workflow-alert"),
+    title,
+    count,
+    message:
+      data.message?.trim() ||
+      (count > 1 ? `${title} 等 ${count} 项已回到工作流` : `${title} 已回到工作流`),
+    createdAt: data.createdAt || nowIso(),
+    acknowledged: false
+  };
+}
+
+function normalizeCodexDetectorSettings(
+  settings: Partial<CodexDetectorSettings> | null | undefined
+): CodexDetectorSettings {
+  return {
+    ...defaultCodexDetectorSettings,
+    ...settings,
+    enabled: settings?.enabled ?? defaultCodexDetectorSettings.enabled,
+    templateWidth: settings?.templateWidth || defaultCodexDetectorSettings.templateWidth,
+    templateHeight: settings?.templateHeight || defaultCodexDetectorSettings.templateHeight,
+    templateScalePercent:
+      settings?.templateScalePercent || defaultCodexDetectorSettings.templateScalePercent,
+    screenWidth: settings?.screenWidth || defaultCodexDetectorSettings.screenWidth,
+    screenHeight: settings?.screenHeight || defaultCodexDetectorSettings.screenHeight,
+    screenScalePercent: settings?.screenScalePercent || defaultCodexDetectorSettings.screenScalePercent
+  };
+}
+
+function computeCodexDetectorScale(settings: CodexDetectorSettings) {
+  const widthRatio = settings.screenWidth / Math.max(1, settings.templateWidth);
+  const heightRatio = settings.screenHeight / Math.max(1, settings.templateHeight);
+  const resolutionRatio = Math.sqrt(widthRatio * heightRatio);
+  const dpiRatio =
+    settings.screenScalePercent / Math.max(1, settings.templateScalePercent);
+  return Math.min(2.5, Math.max(0.4, resolutionRatio * dpiRatio));
 }
 
 function resolveCodexStatusDisplay(data: CodexStatusData) {
@@ -744,6 +867,7 @@ function resolveCodexStatusDisplay(data: CodexStatusData) {
 }
 
 function CodexStatusPanel() {
+  const [workflowAlert, setWorkflowAlert] = useState<WorkflowReturnAlert | null>(null);
   const [statusData, setStatusData] = useState<CodexStatusData>({
     status: "idle",
     message: "无请求"
@@ -753,10 +877,14 @@ function CodexStatusPanel() {
     let cancelled = false;
 
     function loadStatus() {
-      invoke<CodexStatusData | null>("load_codex_status")
-        .then((data) => {
+      Promise.all([
+        invoke<CodexStatusData | null>("load_codex_status"),
+        invoke<WorkflowReturnAlert | null>("load_workflow_return_alert")
+      ])
+        .then(([data, alert]) => {
           if (!cancelled) {
             setStatusData(normalizeCodexStatus(data));
+            setWorkflowAlert(normalizeWorkflowReturnAlert(alert));
           }
         })
         .catch(() => {
@@ -776,14 +904,28 @@ function CodexStatusPanel() {
   }, []);
 
   const display = resolveCodexStatusDisplay(statusData);
-  const title = `${display.label}${display.message ? `：${display.message}` : ""}`;
+  const title = workflowAlert
+    ? `${display.label}：${workflowAlert.message || "等待事项已回到工作流，点击确认"}`
+    : `${display.label}${display.message ? `：${display.message}` : ""}`;
 
   return (
     <main
-      className={`codex-status-window ${display.status}`}
+      className={`codex-status-window ${display.status} ${
+        workflowAlert ? "workflow-alert" : ""
+      }`}
       title={title}
+      onClick={() => {
+        if (!workflowAlert) {
+          return;
+        }
+        invoke("acknowledge_workflow_return_alert")
+          .then(() => setWorkflowAlert(null))
+          .catch(() => undefined);
+      }}
       onMouseDown={() => {
-        getCurrentWindow().startDragging().catch(() => undefined);
+        if (!workflowAlert) {
+          getCurrentWindow().startDragging().catch(() => undefined);
+        }
       }}
     >
       <div className="traffic-lights" aria-label={title}>
@@ -792,6 +934,11 @@ function CodexStatusPanel() {
         <span className="traffic-light green" />
       </div>
       <span className="codex-status-text">{display.label}</span>
+      {workflowAlert ? (
+        <span className="workflow-alert-flag" aria-label="工作流回流待确认">
+          <Flag size={28} />
+        </span>
+      ) : null}
     </main>
   );
 }
@@ -860,7 +1007,15 @@ function App() {
   const [workflowCards, setWorkflowCards] = useState<WorkflowCard[]>([]);
   const [waitingWorkflowCards, setWaitingWorkflowCards] = useState<WaitingWorkflowCard[]>([]);
   const [codexDetectorEnabled, setCodexDetectorEnabled] = useState(true);
+  const [codexDetectorSettings, setCodexDetectorSettings] = useState<CodexDetectorSettings>(
+    defaultCodexDetectorSettings
+  );
   const [codexDetectorSaving, setCodexDetectorSaving] = useState(false);
+  const [codexDetectorStatus, setCodexDetectorStatus] = useState<CodexStatusData>({
+    status: "idle",
+    message: "等待检测"
+  });
+  const [codexMatchImageUrl, setCodexMatchImageUrl] = useState("");
   const [notifiedReminderIds, setNotifiedReminderIds] = useState<string[]>([]);
   const [selectedEventId, setSelectedEventId] = useState(initialTasks[0].id);
   const [selectedListId, setSelectedListId] = useState<SelectedListId>("today");
@@ -887,7 +1042,9 @@ function App() {
   const [draggingWorkflowSource, setDraggingWorkflowSource] = useState<WorkflowCard | null>(null);
   const [draggingWorkflowCardId, setDraggingWorkflowCardId] = useState("");
   const [dragOverWorkflowCardId, setDragOverWorkflowCardId] = useState("");
-  const [workflowDropTarget, setWorkflowDropTarget] = useState<"queue" | "waiting" | "">("");
+  const [workflowInsertPosition, setWorkflowInsertPosition] =
+    useState<WorkflowInsertPosition>("after");
+  const [workflowDropTarget, setWorkflowDropTarget] = useState<WorkflowDropTarget>("");
   const [pendingWaitingCard, setPendingWaitingCard] = useState<PendingWaitingCard | null>(null);
   const [waitingMode, setWaitingMode] = useState<"duration" | "endTime">("duration");
   const [waitingMinutes, setWaitingMinutes] = useState(10);
@@ -951,7 +1108,7 @@ function App() {
       selectedEvent ??
       tasks
         .filter((task) => !task.completed)
-        .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b))[0] ??
+        .sort((a, b) => compareTaskDate(a, b) || compareTaskTime(a, b))[0] ??
       null
     );
   }, [selectedEvent, tasks]);
@@ -959,13 +1116,13 @@ function App() {
   const workflowTaskPreview = useMemo(() => {
     return tasks
       .filter((task) => !task.completed)
-      .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b))
+      .sort((a, b) => compareTaskDate(a, b) || compareTaskTime(a, b))
       .slice(0, 8);
   }, [tasks]);
 
   const openTaskCountByDate = useMemo(() => {
     return tasks.reduce<Record<string, number>>((counts, task) => {
-      if (!task.completed) {
+      if (!task.completed && task.date) {
         counts[task.date] = (counts[task.date] ?? 0) + 1;
       }
       return counts;
@@ -1046,7 +1203,7 @@ function App() {
           return task.date === todayKey && !task.completed;
         }
         if (selectedListId === "upcoming") {
-          return task.date >= todayKey && task.date <= nextWeekKey && !task.completed;
+          return isTaskDateInRange(task, todayKey, nextWeekKey) && !task.completed;
         }
         if (selectedListId === "important") {
           return task.priority === "high" && !task.completed;
@@ -1068,12 +1225,12 @@ function App() {
       .sort((a, b) => {
         if (sortMode === "priority") {
           const rank: Record<Priority, number> = { high: 0, medium: 1, low: 2, none: 3 };
-          return rank[a.priority] - rank[b.priority] || a.date.localeCompare(b.date);
+          return rank[a.priority] - rank[b.priority] || compareTaskDate(a, b);
         }
         if (sortMode === "manual") {
           return a.order - b.order;
         }
-        const dateCompare = a.date.localeCompare(b.date);
+        const dateCompare = compareTaskDate(a, b);
         return dateCompare === 0 ? compareTaskTime(a, b) : dateCompare;
       });
   }, [tasks, selectedListId, sortMode, taskSearch, today, todayKey]);
@@ -1085,7 +1242,7 @@ function App() {
     return {
       today: tasks.filter((task) => task.date === todayKey && !task.completed).length,
       upcoming: tasks.filter(
-        (task) => task.date >= todayKey && task.date <= nextWeekKey && !task.completed
+        (task) => isTaskDateInRange(task, todayKey, nextWeekKey) && !task.completed
       ).length,
       important: tasks.filter((task) => task.priority === "high" && !task.completed).length,
       completed: tasks.filter((task) => task.completed).length,
@@ -1164,14 +1321,17 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke<boolean>("load_codex_detector_enabled")
-      .then((enabled) => {
+    invoke<CodexDetectorSettings>("load_codex_detector_settings")
+      .then((settings) => {
         if (!cancelled) {
-          setCodexDetectorEnabled(enabled);
+          const normalized = normalizeCodexDetectorSettings(settings);
+          setCodexDetectorSettings(normalized);
+          setCodexDetectorEnabled(normalized.enabled);
         }
       })
       .catch(() => {
         if (!cancelled) {
+          setCodexDetectorSettings(defaultCodexDetectorSettings);
           setCodexDetectorEnabled(true);
         }
       });
@@ -1180,6 +1340,55 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (view !== "codex") {
+      return;
+    }
+
+    let cancelled = false;
+    let currentImageUrl = "";
+
+    async function loadDetectorPreview() {
+      try {
+        const [statusData, imageBytes] = await Promise.all([
+          invoke<CodexStatusData | null>("load_codex_status"),
+          invoke<number[] | null>("load_codex_match_image")
+        ]);
+        if (cancelled) {
+          return;
+        }
+
+        setCodexDetectorStatus(normalizeCodexStatus(statusData));
+        const nextImageUrl = imageBytes?.length
+          ? URL.createObjectURL(
+              new Blob([new Uint8Array(imageBytes)], { type: "image/png" })
+            )
+          : "";
+        if (currentImageUrl) {
+          URL.revokeObjectURL(currentImageUrl);
+        }
+        currentImageUrl = nextImageUrl;
+        setCodexMatchImageUrl(nextImageUrl);
+      } catch {
+        if (!cancelled) {
+          setCodexDetectorStatus({ status: "pending_approval", message: "读取检测结果失败" });
+        }
+      }
+    }
+
+    void loadDetectorPreview();
+    const timer = window.setInterval(loadDetectorPreview, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      if (currentImageUrl) {
+        URL.revokeObjectURL(currentImageUrl);
+      }
+      setCodexMatchImageUrl("");
+    };
+  }, [view]);
 
   useEffect(() => {
     if (!dataLoaded) {
@@ -1280,16 +1489,19 @@ function App() {
 
     function workflowTargetFromPointer(event: PointerEvent) {
       const target = document.elementFromPoint(event.clientX, event.clientY);
-      const cardId = target
-        ?.closest<HTMLElement>(".workflow-card[data-workflow-card-id]")
-        ?.dataset.workflowCardId;
+      const card = target?.closest<HTMLElement>(".workflow-card[data-workflow-card-id]");
+      const cardId = card?.dataset.workflowCardId ?? "";
+      const insertPosition: WorkflowInsertPosition =
+        card && event.clientY < card.getBoundingClientRect().top + card.offsetHeight / 2
+          ? "before"
+          : "after";
       const dropPanel = target?.closest<HTMLElement>(".workflow-drop-panel");
-      const dropTarget: "queue" | "waiting" | "" = dropPanel?.classList.contains("waiting")
+      const dropTarget: WorkflowDropTarget = dropPanel?.classList.contains("waiting")
         ? "waiting"
         : dropPanel?.classList.contains("queue")
           ? "queue"
           : "";
-      return { cardId: cardId ?? "", dropTarget };
+      return { cardId, dropTarget, insertPosition };
     }
 
     function handlePointerMove(event: PointerEvent) {
@@ -1339,6 +1551,7 @@ function App() {
         const workflowTarget = workflowTargetFromPointer(event);
         setWorkflowDropTarget(workflowTarget.dropTarget);
         setDragOverWorkflowCardId(workflowTarget.cardId);
+        setWorkflowInsertPosition(workflowTarget.insertPosition);
       }
     }
 
@@ -1368,7 +1581,11 @@ function App() {
           workflowTarget.cardId &&
           workflowTarget.cardId !== pendingWorkflowDrag.cardId
         ) {
-          reorderWorkflowCard(pendingWorkflowDrag.cardId, workflowTarget.cardId);
+          reorderWorkflowCard(
+            pendingWorkflowDrag.cardId,
+            workflowTarget.cardId,
+            workflowTarget.insertPosition
+          );
         } else if (workflowTarget.dropTarget === "waiting") {
           if (pendingWorkflowDrag.sourceCard) {
             openWaitingSettings(pendingWorkflowDrag.sourceCard);
@@ -1380,8 +1597,17 @@ function App() {
               openWaitingSettings(card, card.id);
             }
           }
-        } else if (workflowTarget.dropTarget === "queue" && pendingWorkflowDrag.sourceCard) {
-          addWorkflowCard(pendingWorkflowDrag.sourceCard);
+        } else if (workflowTarget.dropTarget === "queue") {
+          if (pendingWorkflowDrag.sourceCard) {
+            addWorkflowCard(
+              pendingWorkflowDrag.sourceCard,
+              workflowTarget.cardId
+                ? { targetId: workflowTarget.cardId, position: workflowTarget.insertPosition }
+                : { position: "tail" }
+            );
+          } else if (pendingWorkflowDrag.cardId && !workflowTarget.cardId) {
+            moveWorkflowCardToTail(pendingWorkflowDrag.cardId);
+          }
         }
       }
 
@@ -1455,6 +1681,19 @@ function App() {
         }));
       });
       setToast(`${dueCards[0].title} 已加入工作流`);
+      void invoke("save_workflow_return_alert", {
+        data: {
+          id: createId("workflow-return"),
+          title: dueCards[0].title,
+          count: dueCards.length,
+          message:
+            dueCards.length > 1
+              ? `${dueCards[0].title} 等 ${dueCards.length} 项已回到工作流`
+              : `${dueCards[0].title} 已回到工作流`,
+          createdAt: nowIso(),
+          acknowledged: false
+        }
+      });
       window.setTimeout(() => setToast(""), 2800);
     }, 10000);
 
@@ -1532,8 +1771,14 @@ function App() {
   }
 
   function addEvent(overrides: Partial<TaskEvent> = {}) {
+    const defaultDate =
+      view === "calendar"
+        ? selectedDateKey
+        : selectedListId === "today" || selectedListId === "upcoming"
+          ? todayKey
+          : "";
     const newEvent = createTask({
-      date: selectedDateKey,
+      date: defaultDate,
       listId: selectedList && !smartLists.some((list) => list.id === selectedList.id)
         ? selectedList.id
         : "inbox",
@@ -1585,7 +1830,7 @@ function App() {
       completedAt: completed ? nowIso() : null
     });
 
-    if (completed && task.recurrence !== "none") {
+    if (completed && task.recurrence !== "none" && task.date) {
       const nextDate = nextDateForRecurrence(task.date, task.recurrence);
       const nextTask = createTask({
         ...task,
@@ -1721,6 +1966,7 @@ function App() {
     setDraggingWorkflowSource(null);
     setDraggingWorkflowCardId("");
     setDragOverWorkflowCardId("");
+    setWorkflowInsertPosition("after");
     setWorkflowDropTarget("");
   }
 
@@ -1764,16 +2010,35 @@ function App() {
     );
   }
 
-  function addWorkflowCard(card: WorkflowCard, position: "head" | "tail" = "tail") {
+  function addWorkflowCard(
+    card: WorkflowCard,
+    insertTarget: WorkflowInsertTarget = { position: "tail" }
+  ) {
     setWorkflowCards((cards) => {
       const nextCard = createWorkflowCard({
         ...card,
         id: createId("flow-card"),
         createdAt: nowIso(),
         updatedAt: nowIso(),
-        order: position === "head" ? Date.now() * -1 : Date.now()
+        order: Date.now()
       });
-      const nextCards = position === "head" ? [nextCard, ...cards] : [...cards, nextCard];
+      let nextCards = [...cards];
+      if ("targetId" in insertTarget) {
+        const targetIndex = nextCards.findIndex((item) => item.id === insertTarget.targetId);
+        if (targetIndex >= 0) {
+          nextCards.splice(
+            insertTarget.position === "before" ? targetIndex : targetIndex + 1,
+            0,
+            nextCard
+          );
+        } else {
+          nextCards.push(nextCard);
+        }
+      } else if (insertTarget.position === "head") {
+        nextCards = [nextCard, ...nextCards];
+      } else {
+        nextCards.push(nextCard);
+      }
       return nextCards.map((item, index) => ({ ...item, order: index }));
     });
   }
@@ -1836,7 +2101,11 @@ function App() {
     setPendingWaitingCard(null);
   }
 
-  function reorderWorkflowCard(activeId: string, targetId: string) {
+  function reorderWorkflowCard(
+    activeId: string,
+    targetId: string,
+    position: WorkflowInsertPosition = "before"
+  ) {
     if (activeId === targetId) {
       return;
     }
@@ -1848,7 +2117,25 @@ function App() {
       }
       const nextCards = [...cards];
       const [moving] = nextCards.splice(activeIndex, 1);
-      nextCards.splice(targetIndex, 0, moving);
+      const nextTargetIndex = nextCards.findIndex((item) => item.id === targetId);
+      if (nextTargetIndex < 0) {
+        return cards;
+      }
+      nextCards.splice(position === "before" ? nextTargetIndex : nextTargetIndex + 1, 0, moving);
+      return nextCards.map((item, index) => ({ ...item, order: index }));
+    });
+  }
+
+  function moveWorkflowCardToTail(cardId: string) {
+    setWorkflowCards((cards) => {
+      const activeIndex = cards.findIndex((item) => item.id === cardId);
+      if (activeIndex < 0 || activeIndex === cards.length - 1) {
+        return cards;
+      }
+
+      const nextCards = [...cards];
+      const [moving] = nextCards.splice(activeIndex, 1);
+      nextCards.push(moving);
       return nextCards.map((item, index) => ({ ...item, order: index }));
     });
   }
@@ -1900,8 +2187,11 @@ function App() {
 
   function handleWorkflowQueueDrop(event: DragEvent<HTMLElement>) {
     const sourceCard = readWorkflowSourceDragData(event);
+    const cardId = readWorkflowCardDragId(event);
     if (sourceCard) {
-      addWorkflowCard(sourceCard);
+      addWorkflowCard(sourceCard, { position: "tail" });
+    } else if (cardId) {
+      moveWorkflowCardToTail(cardId);
     }
     resetWorkflowDragState();
   }
@@ -1923,14 +2213,17 @@ function App() {
   function toggleCodexDetector() {
     const nextEnabled = !codexDetectorEnabled;
     setCodexDetectorEnabled(nextEnabled);
+    setCodexDetectorSettings((settings) => ({ ...settings, enabled: nextEnabled }));
     setCodexDetectorSaving(true);
     invoke<boolean>("set_codex_detector_enabled", { enabled: nextEnabled })
       .then((enabled) => {
         setCodexDetectorEnabled(enabled);
+        setCodexDetectorSettings((settings) => ({ ...settings, enabled }));
         setToast(enabled ? "Codex 状态检测已开启" : "Codex 状态检测已关闭");
       })
       .catch(() => {
         setCodexDetectorEnabled(!nextEnabled);
+        setCodexDetectorSettings((settings) => ({ ...settings, enabled: !nextEnabled }));
         setToast("状态检测设置保存失败");
       })
       .finally(() => {
@@ -1939,7 +2232,42 @@ function App() {
       });
   }
 
+  function saveCodexDetectorSettings(changes: Partial<CodexDetectorSettings>) {
+    const previousSettings = codexDetectorSettings;
+    const nextSettings = normalizeCodexDetectorSettings({
+      ...codexDetectorSettings,
+      ...changes
+    });
+    setCodexDetectorSettings(nextSettings);
+    setCodexDetectorEnabled(nextSettings.enabled);
+    setCodexDetectorSaving(true);
+    invoke<CodexDetectorSettings>("set_codex_detector_settings", { settings: nextSettings })
+      .then((settings) => {
+        const normalized = normalizeCodexDetectorSettings(settings);
+        setCodexDetectorSettings(normalized);
+        setCodexDetectorEnabled(normalized.enabled);
+        setToast("匹配设置已保存");
+      })
+      .catch(() => {
+        setCodexDetectorSettings(previousSettings);
+        setCodexDetectorEnabled(previousSettings.enabled);
+        setToast("匹配设置保存失败");
+      })
+      .finally(() => {
+        setCodexDetectorSaving(false);
+        window.setTimeout(() => setToast(""), 2200);
+      });
+  }
+
   function openEventInCalendar(event: TaskEvent) {
+    if (!event.date) {
+      setSelectedEventId(event.id);
+      setView("events");
+      setToast("无日期事项不能跳转到日历");
+      window.setTimeout(() => setToast(""), 2200);
+      return;
+    }
+
     const date = new Date(`${event.date}T00:00:00`);
     setSelectedDate({
       year: date.getFullYear(),
@@ -2367,6 +2695,13 @@ function App() {
                 updateSelectedEvent({ date: event.target.value })
               }
             />
+            <button
+              className="no-date-button"
+              type="button"
+              onClick={() => updateSelectedEvent({ date: "" })}
+            >
+              无日期
+            </button>
           </label>
           <label className="field">
             <span>清单</span>
@@ -2744,7 +3079,7 @@ function App() {
           <span>
             <strong>{task.title || "未命名事项"}</strong>
             <small>
-              {task.date} · {formatTaskTime(task)}
+              {formatTaskDate(task)} · {formatTaskTime(task)}
               {list ? ` · ${list.name}` : ""}
             </small>
           </span>
@@ -2796,7 +3131,7 @@ function App() {
               <dl>
                 <div>
                   <dt>日期</dt>
-                  <dd>{workflowCurrentTask.date}</dd>
+                  <dd>{formatTaskDate(workflowCurrentTask)}</dd>
                 </div>
                 <div>
                   <dt>时间</dt>
@@ -2852,7 +3187,7 @@ function App() {
                     <span>{task.icon}</span>
                     <strong>{task.title}</strong>
                     <small>
-                      {task.date} · {formatTaskTime(task)}
+                      {formatTaskDate(task)} · {formatTaskTime(task)}
                     </small>
                   </button>
                 ))
@@ -2906,7 +3241,12 @@ function App() {
 
     return (
       <article
-        className={`workflow-source-card ${sourceKind}`}
+        className={`workflow-source-card ${sourceKind} ${
+          draggingWorkflowSource?.sourceKind === sourceKind &&
+          draggingWorkflowSource.sourceId === source.id
+            ? "is-copying"
+            : ""
+        }`}
         key={`${sourceKind}-${source.id}`}
         onPointerDown={(event) => {
           if (event.button !== 0) {
@@ -2933,6 +3273,7 @@ function App() {
             onClick={() => deleteWorkflowItem(sourceKind, source.id)}
             onDragStart={(event) => event.preventDefault()}
             onMouseDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
             aria-label="删除来源"
           >
             <Trash2 size={14} />
@@ -2959,7 +3300,15 @@ function App() {
     return (
       <article
         className={`workflow-card priority-${card.priority} ${
-          dragOverWorkflowCardId === card.id ? "drag-over" : ""
+          dragOverWorkflowCardId === card.id && draggingWorkflowCardId !== card.id
+            ? "drag-over"
+            : ""
+        } ${
+          dragOverWorkflowCardId === card.id && draggingWorkflowCardId !== card.id
+            ? `insert-${workflowInsertPosition}`
+            : ""
+        } ${
+          draggingWorkflowCardId === card.id ? "is-moving" : ""
         }`}
         data-workflow-card-id={card.id}
         key={card.id}
@@ -2980,7 +3329,12 @@ function App() {
           event.dataTransfer.dropEffect = draggingWorkflowCardIdRef.current
             ? "move"
             : "copy";
+          const insertPosition =
+            event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.offsetHeight / 2
+              ? "before"
+              : "after";
           setDragOverWorkflowCardId(card.id);
+          setWorkflowInsertPosition(insertPosition);
         }}
         onDragLeave={() => {
           if (dragOverWorkflowCardId === card.id) {
@@ -2992,10 +3346,14 @@ function App() {
           event.stopPropagation();
           const movingCardId = readWorkflowCardDragId(event);
           const sourceCard = readWorkflowSourceDragData(event);
+          const insertPosition =
+            event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.offsetHeight / 2
+              ? "before"
+              : "after";
           if (movingCardId) {
-            reorderWorkflowCard(movingCardId, card.id);
+            reorderWorkflowCard(movingCardId, card.id, insertPosition);
           } else if (sourceCard) {
-            addWorkflowCard(sourceCard);
+            addWorkflowCard(sourceCard, { targetId: card.id, position: insertPosition });
           }
           resetWorkflowDragState();
         }}
@@ -3337,7 +3695,7 @@ function App() {
   function renderWorkflowBoardView() {
     const workflowTaskSources = tasks
       .filter((task) => !task.completed)
-      .sort((a, b) => a.date.localeCompare(b.date) || compareTaskTime(a, b));
+      .sort((a, b) => compareTaskDate(a, b) || compareTaskTime(a, b));
     const orderedWorkflowCards = [...workflowCards].sort((a, b) => a.order - b.order);
     const orderedWaitingCards = [...waitingWorkflowCards].sort(
       (a, b) => a.order - b.order
@@ -3353,6 +3711,10 @@ function App() {
           <section
             className={`workflow-drop-panel queue ${
               workflowDropTarget === "queue" ? "drop-active" : ""
+            } ${
+              workflowDropTarget === "queue" && !dragOverWorkflowCardId
+                ? "tail-drop-active"
+                : ""
             }`}
             onDragEnter={(event) => {
               event.preventDefault();
@@ -3367,6 +3729,13 @@ function App() {
                 ? "move"
                 : "copy";
               setWorkflowDropTarget("queue");
+              if (
+                !(event.target as HTMLElement).closest(
+                  ".workflow-card[data-workflow-card-id]"
+                )
+              ) {
+                setDragOverWorkflowCardId("");
+              }
             }}
             onDragLeave={() => {
               if (workflowDropTarget === "queue") {
@@ -3482,6 +3851,12 @@ function App() {
   }
 
   function renderCodexDetectorView() {
+    const detectorDisplay = resolveCodexStatusDisplay(codexDetectorStatus);
+    const match = codexDetectorStatus.match;
+    const computedDetectorScale = computeCodexDetectorScale(codexDetectorSettings);
+    const templateResolutionValue = `${codexDetectorSettings.templateWidth}x${codexDetectorSettings.templateHeight}`;
+    const screenResolutionValue = `${codexDetectorSettings.screenWidth}x${codexDetectorSettings.screenHeight}`;
+
     return (
       <section className="codex-control-workspace">
         <article className="codex-control-panel">
@@ -3511,6 +3886,225 @@ function App() {
             </strong>
             <small>{codexDetectorSaving ? "正在保存..." : "设置已记忆"}</small>
           </div>
+
+          <section className="codex-scale-panel">
+            <div className="codex-scale-title">
+              <div>
+                <p className="eyebrow">Match Scale</p>
+                <h3>匹配分辨率与缩放</h3>
+              </div>
+              <strong>{computedDetectorScale.toFixed(2)}×</strong>
+            </div>
+            <div className="codex-scale-grid">
+              <label>
+                模板图片分辨率
+                <select
+                  value={
+                    codexResolutionPresets.some(
+                      (preset) =>
+                        preset.width === codexDetectorSettings.templateWidth &&
+                        preset.height === codexDetectorSettings.templateHeight
+                    )
+                      ? templateResolutionValue
+                      : "custom"
+                  }
+                  onChange={(event) => {
+                    const preset = codexResolutionPresets.find(
+                      (item) => `${item.width}x${item.height}` === event.target.value
+                    );
+                    if (preset && preset.width > 0) {
+                      saveCodexDetectorSettings({
+                        templateWidth: preset.width,
+                        templateHeight: preset.height
+                      });
+                    }
+                  }}
+                >
+                  {codexResolutionPresets.map((preset) => (
+                    <option
+                      key={`template-${preset.label}`}
+                      value={preset.width > 0 ? `${preset.width}x${preset.height}` : "custom"}
+                    >
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                模板缩放
+                <select
+                  value={codexDetectorSettings.templateScalePercent}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({
+                      templateScalePercent: Number(event.target.value)
+                    })
+                  }
+                >
+                  {codexScalePresets.map((scale) => (
+                    <option key={`template-scale-${scale}`} value={scale}>
+                      {scale}%
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                当前屏幕分辨率
+                <select
+                  value={
+                    codexResolutionPresets.some(
+                      (preset) =>
+                        preset.width === codexDetectorSettings.screenWidth &&
+                        preset.height === codexDetectorSettings.screenHeight
+                    )
+                      ? screenResolutionValue
+                      : "custom"
+                  }
+                  onChange={(event) => {
+                    const preset = codexResolutionPresets.find(
+                      (item) => `${item.width}x${item.height}` === event.target.value
+                    );
+                    if (preset && preset.width > 0) {
+                      saveCodexDetectorSettings({
+                        screenWidth: preset.width,
+                        screenHeight: preset.height
+                      });
+                    }
+                  }}
+                >
+                  {codexResolutionPresets.map((preset) => (
+                    <option
+                      key={`screen-${preset.label}`}
+                      value={preset.width > 0 ? `${preset.width}x${preset.height}` : "custom"}
+                    >
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                当前缩放
+                <select
+                  value={codexDetectorSettings.screenScalePercent}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({
+                      screenScalePercent: Number(event.target.value)
+                    })
+                  }
+                >
+                  {codexScalePresets.map((scale) => (
+                    <option key={`screen-scale-${scale}`} value={scale}>
+                      {scale}%
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="codex-custom-resolution">
+              <label>
+                模板宽
+                <input
+                  min={1}
+                  type="number"
+                  value={codexDetectorSettings.templateWidth}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({ templateWidth: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                模板高
+                <input
+                  min={1}
+                  type="number"
+                  value={codexDetectorSettings.templateHeight}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({ templateHeight: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                屏幕宽
+                <input
+                  min={1}
+                  type="number"
+                  value={codexDetectorSettings.screenWidth}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({ screenWidth: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                屏幕高
+                <input
+                  min={1}
+                  type="number"
+                  value={codexDetectorSettings.screenHeight}
+                  onChange={(event) =>
+                    saveCodexDetectorSettings({ screenHeight: Number(event.target.value) })
+                  }
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="codex-match-panel">
+            <div className="codex-match-header">
+              <div>
+                <p className="eyebrow">实时检测结果</p>
+                <h3>{detectorDisplay.label}</h3>
+              </div>
+              <span className={`codex-match-status ${detectorDisplay.status}`}>
+                {codexDetectorEnabled ? detectorDisplay.message : "检测已关闭"}
+              </span>
+            </div>
+
+            {match && codexMatchImageUrl ? (
+              <div className="codex-match-content">
+                <div className="codex-match-image-wrap">
+                  <img src={codexMatchImageUrl} alt={`匹配区域：${match.label}`} />
+                </div>
+                <dl className="codex-match-meta">
+                  <div>
+                    <dt>识别类型</dt>
+                    <dd>{match.label}</dd>
+                  </div>
+                  <div>
+                    <dt>显示器</dt>
+                    <dd>第 {match.screenIndex + 1} 块屏幕</dd>
+                  </div>
+                  <div>
+                    <dt>屏幕坐标</dt>
+                    <dd>
+                      {match.x}, {match.y}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>匹配尺寸</dt>
+                    <dd>
+                      {match.width} × {match.height}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>OpenCV 相似度</dt>
+                    <dd>{((match.confidence ?? 1 - match.score / 100) * 100).toFixed(1)}%</dd>
+                  </div>
+                  <div>
+                    <dt>缩放比例</dt>
+                    <dd>{match.scale == null ? "-" : `${match.scale.toFixed(1)}×`}</dd>
+                  </div>
+                  <div>
+                    <dt>连续帧</dt>
+                    <dd>{match.consecutiveFrames ?? "-"}</dd>
+                  </div>
+                </dl>
+              </div>
+            ) : (
+              <div className="codex-match-empty">
+                <Search size={22} />
+                <span>{codexDetectorEnabled ? "当前屏幕未匹配到状态标志" : "开启检测后显示命中区域"}</span>
+              </div>
+            )}
+          </section>
         </article>
       </section>
     );
@@ -3622,6 +4216,7 @@ function App() {
           >
             <span>{draggingWorkflowPreview.icon}</span>
             <strong>{draggingWorkflowPreview.title}</strong>
+            <small>{draggingWorkflowCardId ? "移动" : "复制"}</small>
           </div>
         ) : null}
         {toast ? <div className="toast">{toast}</div> : null}

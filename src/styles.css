@@ -117,7 +117,7 @@ select {
 
 .codex-status-window {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 22px;
   width: 420px;
@@ -135,6 +135,14 @@ select {
 
 .codex-status-window:active {
   cursor: grabbing;
+}
+
+.codex-status-window.workflow-alert {
+  cursor: pointer;
+}
+
+.codex-status-window.workflow-alert:active {
+  cursor: pointer;
 }
 
 .traffic-lights {
@@ -202,6 +210,19 @@ select {
   white-space: nowrap;
 }
 
+.workflow-alert-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  color: #facc15;
+  border-radius: 50%;
+  background: rgba(250, 204, 21, 0.16);
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.34);
+  animation: workflow-alert-flag-pop 920ms ease-in-out infinite;
+}
+
 @keyframes codex-status-in {
   from {
     opacity: 0;
@@ -220,6 +241,17 @@ select {
     box-shadow:
       inset 0 -8px 16px rgba(15, 23, 42, 0.18),
       0 0 42px currentColor;
+  }
+}
+
+@keyframes workflow-alert-flag-pop {
+  0%,
+  100% {
+    transform: scale(0.86);
+  }
+
+  50% {
+    transform: scale(1.2);
   }
 }
 
@@ -1000,6 +1032,31 @@ h1 {
 .field select:focus {
   outline: 2px solid #bfdbfe;
   border-color: #60a5fa;
+}
+
+.no-date-button {
+  justify-self: start;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.no-date-button:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  transform: translateY(-1px);
 }
 
 .field-row {
@@ -2666,6 +2723,34 @@ h1 {
   transform: translateY(-2px);
 }
 
+.workflow-drop-panel.tail-drop-active {
+  position: relative;
+}
+
+.workflow-drop-panel.tail-drop-active::after,
+.workflow-drop-panel.waiting.drop-active::after {
+  content: "松开放到队尾";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  margin-top: 4px;
+  color: #1d4ed8;
+  border: 1px dashed #60a5fa;
+  border-radius: 8px;
+  background: rgba(219, 234, 254, 0.78);
+  font-size: 13px;
+  font-weight: 900;
+  animation: workflow-drop-hint 620ms ease both;
+}
+
+.workflow-drop-panel.waiting.drop-active::after {
+  content: "松开设置等待时间";
+  color: #92400e;
+  border-color: #f59e0b;
+  background: rgba(254, 243, 199, 0.82);
+}
+
 .workflow-card-list {
   display: grid;
   gap: 10px;
@@ -2675,7 +2760,7 @@ h1 {
   position: fixed;
   z-index: 120;
   display: inline-grid;
-  grid-template-columns: 30px minmax(0, 160px);
+  grid-template-columns: 30px minmax(0, 150px) auto;
   align-items: center;
   gap: 8px;
   min-height: 46px;
@@ -2707,6 +2792,15 @@ h1 {
   font-size: 14px;
 }
 
+.workflow-drag-preview small {
+  padding: 3px 7px;
+  color: #1d4ed8;
+  border-radius: 999px;
+  background: #dbeafe;
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .workflow-card,
 .workflow-source-card,
 .workflow-waiting-card {
@@ -2718,6 +2812,7 @@ h1 {
 
 .workflow-card,
 .workflow-source-card {
+  position: relative;
   display: grid;
   align-items: center;
   gap: 10px;
@@ -2750,6 +2845,36 @@ h1 {
   background: #eff6ff;
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
   transform: translateY(-1px);
+}
+
+.workflow-card.is-moving,
+.workflow-source-card.is-copying {
+  opacity: 0.48;
+  transform: scale(0.985);
+}
+
+.workflow-card.insert-before::before,
+.workflow-card.insert-after::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  z-index: 3;
+  height: 4px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.16),
+    0 7px 18px rgba(37, 99, 235, 0.34);
+  animation: workflow-insert-line 220ms ease both;
+}
+
+.workflow-card.insert-before::before {
+  top: -8px;
+}
+
+.workflow-card.insert-after::after {
+  bottom: -8px;
 }
 
 .workflow-card:active,
@@ -3301,6 +3426,205 @@ h1 {
   font-weight: 800;
 }
 
+.codex-scale-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #bed1f4;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.codex-scale-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.codex-scale-title h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.codex-scale-title strong {
+  padding: 6px 10px;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  font-size: 14px;
+}
+
+.codex-scale-grid,
+.codex-custom-resolution {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.codex-scale-panel label {
+  display: grid;
+  gap: 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.codex-scale-panel input,
+.codex-scale-panel select {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  font-weight: 800;
+}
+
+.codex-match-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line, #d8e0ea);
+}
+
+.codex-match-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.codex-match-header h3 {
+  margin: 0;
+  color: var(--text, #162033);
+  font-size: 20px;
+}
+
+.codex-match-status {
+  max-width: 380px;
+  overflow: hidden;
+  padding: 7px 10px;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-match-status.working {
+  color: #b4232d;
+  border-color: #f0a3a3;
+  background: #fff0f0;
+}
+
+.codex-match-status.pending_approval {
+  color: #925d10;
+  border-color: #e6c45f;
+  background: #fff8e5;
+}
+
+.codex-match-status.idle,
+.codex-match-status.done {
+  color: #126443;
+  border-color: #83cbae;
+  background: #eaf8f1;
+}
+
+.codex-match-content {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.72fr);
+  gap: 14px;
+}
+
+.codex-match-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid #25334a;
+  border-radius: 8px;
+  background: #090d14;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.codex-match-image-wrap img {
+  display: block;
+  width: auto;
+  min-width: min(220px, 100%);
+  max-width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+.codex-match-meta {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  margin: 0;
+}
+
+.codex-match-meta div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #d8e0ea);
+  border-radius: 8px;
+  background: var(--surface-soft, #f7f9fc);
+}
+
+.codex-match-meta dt {
+  color: var(--muted, #718096);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.codex-match-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text, #162033);
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-match-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 150px;
+  color: var(--muted, #718096);
+  border: 1px dashed var(--line-strong, #bdc9d8);
+  border-radius: 8px;
+  background: var(--surface-soft, #f7f9fc);
+  font-weight: 800;
+}
+
+@media (max-width: 780px) {
+  .codex-match-content {
+    grid-template-columns: 1fr;
+  }
+
+  .codex-match-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @keyframes todo-list-in {
   from {
     opacity: 0;
@@ -3828,7 +4152,7 @@ h2 {
 
 .workflow-card.drag-over {
   border-color: var(--primary);
-  box-shadow: 0 -3px 0 var(--primary), var(--shadow-hover);
+  box-shadow: var(--shadow-hover);
 }
 
 .workflow-drag-preview {
@@ -4005,6 +4329,30 @@ h2 {
   to {
     opacity: 1;
     transform: translate(12px, 12px) scale(1.02);
+  }
+}
+
+@keyframes workflow-drop-hint {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes workflow-insert-line {
+  from {
+    opacity: 0;
+    transform: scaleX(0.72);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleX(1);
   }
 }
 

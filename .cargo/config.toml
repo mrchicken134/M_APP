@@ -1,0 +1,8 @@
+[env]
+CLANG_PATH = { value = "D:\\Document\\Work\\m_prooject\\clang-18\\Library\\bin\\clang.exe", force = true }
+LIBCLANG_PATH = { value = "D:\\Document\\Work\\m_prooject\\libclang\\clang\\native", force = true }
+OPENCV_LINK_LIBS = { value = "opencv_world4120", force = true }
+OPENCV_LINK_PATHS = { value = "D:\\Document\\Work\\m_prooject\\opencv-4.12.0\\opencv\\build\\x64\\vc16\\lib", force = true }
+OPENCV_INCLUDE_PATHS = { value = "D:\\Document\\Work\\m_prooject\\opencv-4.12.0\\opencv\\build\\include", force = true }
+OPENCV_CLANG_ARGS = { value = "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH", force = true }
+
